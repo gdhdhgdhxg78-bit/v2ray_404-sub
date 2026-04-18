@@ -161,7 +161,7 @@ def load_config() -> dict:
                 return data
     except:
         pass
-    return {"enabled": True, "support_id": "", "channels": ["@LyricPixelArt"], "sub_admins": {}, "texts": DEFAULT_TEXTS.copy(), "buttons": DEFAULT_BUTTONS.copy()}
+    return {"enabled": True, "support_id": "", "channels": ["@v2ray_404"], "sub_admins": {}, "texts": DEFAULT_TEXTS.copy(), "buttons": DEFAULT_BUTTONS.copy()}
 
 def save_config(data: dict):
     try:
@@ -174,7 +174,7 @@ def save_config(data: dict):
 _config      = load_config()
 BOT_ENABLED  = _config.get("enabled", True)
 SUPPORT_ID   = _config.get("support_id", "")
-CHANNEL_IDS: list = _config.get("channels", ["@LyricPixelArt"])
+CHANNEL_IDS: list = _config.get("channels", ["@v2ray_404"])
 SUB_ADMINS: dict  = _config.get("sub_admins", {})   # {str(user_id): {perm: bool}}
 BOT_TEXTS: dict    = {**DEFAULT_TEXTS, **_config.get("texts", {})}
 BOT_BUTTONS: dict  = {**DEFAULT_BUTTONS, **_config.get("buttons", {})}
