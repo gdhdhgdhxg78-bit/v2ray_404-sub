@@ -8,24 +8,17 @@ from datetime import date, datetime
 
 import jdatetime
 
-from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
 
 PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+EN_FROM_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
 
 def fa_digits(s) -> str:
     return str(s).translate(PERSIAN_DIGITS)
+
+
+def fa_to_en_digits(s) -> str:
+    return str(s).translate(EN_FROM_FA_DIGITS)
 
 
 def jalali_date(dt: datetime | None = None) -> str:
@@ -39,8 +32,22 @@ def jalali_datetime(dt: datetime | None = None) -> str:
     j = jdatetime.datetime.fromgregorian(datetime=dt)
     return fa_digits(j.strftime("%Y/%m/%d %H:%M:%S"))
 
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    TelegramObject,
+)
+from typing import Any, Awaitable, Callable, Dict
 
-# ===== شیم ButtonStyle =====
+# ===== شیم ButtonStyle (برای رنگ دکمه‌ها در نسخه‌های پشتیبان) =====
 try:
     from aiogram.enums import ButtonStyle as _RealButtonStyle  # type: ignore
 
@@ -75,84 +82,153 @@ BOT_TOKEN = "7785105885:AAFNoJapINZ34Kr-N_gcd1_KwYAXJe4yHrM"
 SUPER_ADMIN_IDS = [8478999016,5145727025]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "bot@parhawmz.db")
+DB_PATH = os.path.join(BASE_DIR, "bot24.db")
 SETTINGS_FILE = os.path.join(BASE_DIR, "bot_settings.json")
 
-DEFAULT_SUPPORT_ID = "@Px7Vpn"
-DEFAULT_CHANNELS = []
+DEFAULT_SUPPORT_ID = "@v2ray_404"
+DEFAULT_CHANNELS = ["@v2ray_404"]
 
-# ==================== سرویس‌ها ====================
-SERVICES = {
-    "v2ray": {
-        "label": "V2Ray",
-        "volumes": ["1", "2", "3", "4", "5", "10"],
-        "spec": "نامحدود زمانی",
-    },
-    "openvpn": {
-        "label": "Open VPN",
-        "volumes": ["1", "5", "10", "20"],
-        "spec": "یک ماه — ۲ کاربره",
-    },
-}
-
+# قیمت پیش‌فرض (تومان × ۱۰۰۰ یعنی هزار تومان نمایش داده می‌شود)
 DEFAULT_PRICES = {
-    "v2ray": {
-        "1": 50_000,
-        "2": 90_000,
-        "3": 130_000,
-        "4": 170_000,
-        "5": 200_000,
-        "10": 380_000,
-    },
-    "openvpn": {
-        "1": 80_000,
-        "5": 300_000,
-        "10": 550_000,
-        "20": 1_000_000,
-    },
+    "1": 450_000,
+    "2": 900_000,
+    "3": 1_350_000,
+    "5": 2_250_000,
+    "10": 4_200_000,
+}
+PRODUCT_LABEL = {
+    "1": "۱ گیگ",
+    "2": "۲ گیگ",
+    "3": "۳ گیگ",
+    "5": "۵ گیگ",
+    "10": "۱۰ گیگ",
 }
 
-
-def product_label(service: str, vol: str) -> str:
-    return f"{SERVICES[service]['label']} — {fa_digits(vol)} گیگ"
-
-
-def parse_product(p: str):
-    """تبدیل رشته‌ی محصول به (service, volume). برای رکوردهای قدیمی پیش‌فرض v2ray."""
-    if "_" in p:
-        s, v = p.split("_", 1)
-        if s in SERVICES:
-            return s, v
-    # سازگاری با رکوردهای قدیمی
-    return "v2ray", p
-
+# لیست محصولات پیش‌فرض (ترتیب نمایش از همین لیست)
+DEFAULT_PRODUCTS = [
+    {"key": "1", "label": "۱ گیگ", "price": 450_000},
+    {"key": "2", "label": "۲ گیگ", "price": 900_000},
+    {"key": "3", "label": "۳ گیگ", "price": 1_350_000},
+    {"key": "5", "label": "۵ گیگ", "price": 2_250_000},
+    {"key": "10", "label": "۱۰ گیگ", "price": 4_200_000},
+]
 
 DEFAULT_BUTTON_COLORS = {
     "main_buy": "primary",
+    "main_freeconf": "success",
     "main_my": "success",
     "main_account": "primary",
     "main_invite": "success",
     "main_support": "default",
-    "main_tut_openvpn": "primary",
-    "main_tut_v2ray": "primary",
     "main_admin": "danger",
     "pay_card": "primary",
     "pay_discount": "success",
     "back": "default",
 }
 
-BUTTON_LABELS = {
+DEFAULT_BUTTON_LABELS = {
     "main_buy": "🛒 خرید سرویس جدید",
+    "main_freeconf": "🎁 کانفیگ رایگان",
     "main_my": "📦 سرویس‌های من",
     "main_account": "👤 حساب کاربری",
     "main_invite": "🤝 دعوت دوستان",
     "main_support": "📞 ارتباط با پشتیبانی",
-    "main_tut_openvpn": "📚 آموزش Open VPN",
-    "main_tut_v2ray": "📚 آموزش V2Ray",
     "main_admin": "🛠 پنل مدیریت",
     "pay_card": "💳 کارت به کارت",
     "pay_discount": "🎁 اعمال کد تخفیف",
     "back": "🔙 بازگشت",
+}
+
+# نگاشت زنده — از SETTINGS["button_labels"] خوانده می‌شود
+BUTTON_LABELS = dict(DEFAULT_BUTTON_LABELS)
+
+BUTTON_NAMES_FA = {
+    "main_buy": "دکمه خرید سرویس",
+    "main_freeconf": "دکمه کانفیگ رایگان",
+    "main_my": "دکمه سرویس‌های من",
+    "main_account": "دکمه حساب کاربری",
+    "main_invite": "دکمه دعوت دوستان",
+    "main_support": "دکمه پشتیبانی",
+    "main_admin": "دکمه پنل مدیریت",
+    "pay_card": "دکمه کارت به کارت",
+    "pay_discount": "دکمه اعمال تخفیف",
+    "back": "دکمه بازگشت",
+}
+
+# ===== متن‌های قابل ویرایش =====
+DEFAULT_TEXTS = {
+    "welcome": (
+        "✨ به فروشگاه VPN ما خوش آمدید!\n\n"
+        "🛡 ارائه انواع سرویس‌های VPN با کیفیت عالی\n"
+        "✅ تضمین امنیت ارتباطات شما\n"
+        "📞 پشتیبانی حرفه‌ای ۲۴ ساعته\n\n"
+        "از منوی زیر بخش مورد نظر خود را انتخاب کنید."
+    ),
+    "sales_off": "🚫 فروش بسته است.\n\nلطفاً بعداً مراجعه کنید.",
+    "bot_off_alert": "🛠 ربات در حال بروزرسانی است.\nلطفاً کمی بعد دوباره تلاش کنید.",
+    "join_required": "❌ برای استفاده از ربات لازم است در کانال زیر عضو شوید:",
+    "not_joined": "❌ هنوز عضو نشده‌اید!",
+    "banned": "⛔️ حساب شما مسدود شده است.",
+}
+
+TEXT_NAMES_FA = {
+    "welcome": "متن خوش‌آمد",
+    "sales_off": "متن «فروش بسته است»",
+    "bot_off_alert": "متن «ربات در حال بروزرسانی»",
+    "join_required": "متن «الزام عضویت در کانال»",
+    "not_joined": "متن «هنوز عضو نشده‌اید»",
+    "banned": "متن «حساب مسدود است»",
+}
+
+# ===== اموجی پریمیوم تلگرام (فقط داخل متن HTML قابل استفاده، روی دکمه‌ها نه) =====
+PREMIUM_EMOJIS = {
+    "fire":   "5377498341074542751",
+    "heart":  "5404870433939922908",
+    "rocket": "5276424673834317384",
+    "star":   "5370870893004203987",
+    "check":  "5443038326535759217",
+    "crown":  "5188377234767305988",
+    "lock":   "5188279383087325151",
+    "money":  "5197070321321989384",
+    "gift":   "5188331717857411845",
+    "phone":  "5471978007890188532",
+}
+
+def pe(name_or_id: str, fallback: str) -> str:
+    """ساخت تگ اموجی پریمیوم برای متن HTML.
+    اگر نام شناخته‌شده‌ای از PREMIUM_EMOJIS باشد آی‌دی‌اش را برمی‌دارد، وگرنه خود ورودی را آی‌دی فرض می‌کند.
+    """
+    eid = PREMIUM_EMOJIS.get(name_or_id, name_or_id)
+    return f'<tg-emoji emoji-id="{eid}">{fallback}</tg-emoji>'
+
+
+# ===== مجوزهای ادمین جانبی =====
+ALL_PERMS = [
+    "stats", "users", "broadcast", "channels", "support_id",
+    "products", "prices", "card", "discount", "giftcfg",
+    "approve_receipts", "ban", "texts", "buttons", "colors",
+    "toggle_sales", "toggle_bot", "coins",
+]
+
+PERM_NAMES_FA = {
+    "stats":            "📊 آمار ربات",
+    "users":            "👥 لیست کاربران",
+    "broadcast":        "📢 پیام همگانی",
+    "channels":         "📡 مدیریت چنل‌ها",
+    "support_id":       "🛟 تنظیم پشتیبانی",
+    "products":         "💵 مدیریت محصولات/قیمت‌ها",
+    "prices":           "💰 تغییر قیمت محصولات",
+    "card":             "💳 تنظیم کارت",
+    "discount":         "🎁 ساخت کد تخفیف",
+    "giftcfg":          "🎁 مدیریت کانفیگ هدیه",
+    "approve_receipts": "✅ تایید رسیدها",
+    "ban":              "🚫 بن/آنبن کاربران",
+    "texts":            "✏️ مدیریت متن‌ها",
+    "buttons":          "🔘 مدیریت دکمه‌ها",
+    "colors":           "🎨 تنظیم رنگ دکمه‌ها",
+    "toggle_sales":     "🟢 خاموش/روشن فروش",
+    "toggle_bot":       "🔴 خاموش/روشن ربات",
+    "coins":            "🪙 مدیریت سکه‌ها",
 }
 
 # ==================== ذخیره تنظیمات ====================
@@ -167,21 +243,35 @@ def load_settings() -> dict:
         data = {}
     data.setdefault("support_id", DEFAULT_SUPPORT_ID)
     data.setdefault("channels", DEFAULT_CHANNELS.copy())
-    data.setdefault("prices", {})
+    data.setdefault("prices", DEFAULT_PRICES.copy())
     data.setdefault("colors", DEFAULT_BUTTON_COLORS.copy())
     data.setdefault("card_number", "")
     data.setdefault("card_holder", "")
-    data.setdefault("tutorials", {"v2ray": [], "openvpn": []})
-    # merge default prices per service
-    for svc, prices in DEFAULT_PRICES.items():
-        data["prices"].setdefault(svc, {})
-        for k, v in prices.items():
-            data["prices"][svc].setdefault(k, v)
+    # تنظیمات جدید
+    data.setdefault("sales_enabled", True)
+    data.setdefault("bot_enabled", True)
+    data.setdefault("products", [p.copy() for p in DEFAULT_PRODUCTS])
+    data.setdefault("broadcast_pins", [])
+    # 🪙 سیستم سکه
+    data.setdefault("free_config_coins", 5)   # تعداد سکه برای دریافت یک کانفیگ رایگان
+    data.setdefault("coins_per_referral", 1)  # تعداد سکه به ازای هر دعوت موفق
+    # متن‌ها و برچسب دکمه‌ها قابل ویرایش از پنل
+    data.setdefault("texts", DEFAULT_TEXTS.copy())
+    data.setdefault("button_labels", DEFAULT_BUTTON_LABELS.copy())
+    # ادمین‌های جانبی با مجوز تفکیکی
+    data.setdefault("sub_admins", [])  # [{user_id:int, perms:{perm:bool}}]
+    # merge defaults
+    for k, v in DEFAULT_PRICES.items():
+        data["prices"].setdefault(k, v)
     for k, v in DEFAULT_BUTTON_COLORS.items():
         data["colors"].setdefault(k, v)
-    # tutorials shape
-    for svc in ("v2ray", "openvpn"):
-        data["tutorials"].setdefault(svc, [])
+    for k, v in DEFAULT_TEXTS.items():
+        data["texts"].setdefault(k, v)
+    for k, v in DEFAULT_BUTTON_LABELS.items():
+        data["button_labels"].setdefault(k, v)
+    # سینک: اطمینان از وجود همه قیمت‌های محصولات داخل prices
+    for p in data["products"]:
+        data["prices"].setdefault(p["key"], p["price"])
     return data
 
 
@@ -191,6 +281,13 @@ def save_settings(data: dict):
 
 
 SETTINGS = load_settings()
+
+# سینک برچسب دکمه‌ها از تنظیمات (در زمان اجرا اپدیت می‌شود)
+def sync_button_labels():
+    BUTTON_LABELS.clear()
+    BUTTON_LABELS.update(SETTINGS.get("button_labels") or DEFAULT_BUTTON_LABELS)
+
+sync_button_labels()
 
 
 def s_get(key, default=None):
@@ -202,15 +299,139 @@ def s_set(key, value):
     save_settings(SETTINGS)
 
 
-def get_price(service: str, vol: str) -> int:
-    return SETTINGS["prices"].get(service, {}).get(
-        vol, DEFAULT_PRICES.get(service, {}).get(vol, 0)
-    )
+# ===== متن‌های قابل تنظیم =====
+def get_text(key: str) -> str:
+    return (SETTINGS.get("texts") or {}).get(key) or DEFAULT_TEXTS.get(key, "")
 
 
-def set_price(service: str, vol: str, value: int):
-    SETTINGS["prices"].setdefault(service, {})[vol] = value
+def set_text(key: str, value: str):
+    SETTINGS.setdefault("texts", {})[key] = value
     save_settings(SETTINGS)
+
+
+def get_button_label(key: str) -> str:
+    return (SETTINGS.get("button_labels") or {}).get(key) or DEFAULT_BUTTON_LABELS.get(key, key)
+
+
+def set_button_label(key: str, value: str):
+    SETTINGS.setdefault("button_labels", {})[key] = value
+    save_settings(SETTINGS)
+    sync_button_labels()
+
+
+# ===== ادمین‌های جانبی =====
+def get_sub_admins() -> list:
+    return SETTINGS.get("sub_admins") or []
+
+
+def find_sub_admin(uid: int) -> dict | None:
+    for sa in get_sub_admins():
+        if int(sa.get("user_id", 0)) == int(uid):
+            return sa
+    return None
+
+
+def add_sub_admin(uid: int) -> bool:
+    if find_sub_admin(uid):
+        return False
+    perms = {p: True for p in ALL_PERMS}  # به‌صورت پیش‌فرض همه مجوزها
+    SETTINGS.setdefault("sub_admins", []).append({"user_id": int(uid), "perms": perms})
+    save_settings(SETTINGS)
+    return True
+
+
+def remove_sub_admin(uid: int) -> bool:
+    lst = get_sub_admins()
+    new_lst = [sa for sa in lst if int(sa.get("user_id", 0)) != int(uid)]
+    if len(new_lst) == len(lst):
+        return False
+    SETTINGS["sub_admins"] = new_lst
+    save_settings(SETTINGS)
+    return True
+
+
+def toggle_sub_admin_perm(uid: int, perm: str) -> bool | None:
+    sa = find_sub_admin(uid)
+    if not sa:
+        return None
+    sa.setdefault("perms", {})
+    cur = bool(sa["perms"].get(perm, False))
+    sa["perms"][perm] = not cur
+    save_settings(SETTINGS)
+    return sa["perms"][perm]
+
+
+# ==================== کمک‌های محصولات داینامیک ====================
+def get_products() -> list:
+    """لیست محصولات (ترتیبی)."""
+    return SETTINGS.get("products") or []
+
+
+def get_product(key: str) -> dict | None:
+    for p in get_products():
+        if p["key"] == key:
+            return p
+    return None
+
+
+def get_product_label(key: str) -> str:
+    if key == "free":
+        return "🎁 کانفیگ رایگان"
+    p = get_product(key)
+    if p:
+        return p["label"]
+    return PRODUCT_LABEL.get(key, key)
+
+
+def get_product_price(key: str) -> int:
+    p = get_product(key)
+    if p:
+        return p["price"]
+    return SETTINGS.get("prices", {}).get(key) or DEFAULT_PRICES.get(key, 0)
+
+
+def add_product(label: str, price: int) -> str:
+    """اضافه کردن محصول جدید با کلید یکتا. کلید را برمی‌گرداند."""
+    products = get_products()
+    used_keys = {p["key"] for p in products}
+    # تولید کلید یکتا (شماره سریال)
+    n = 1
+    while str(n) in used_keys:
+        n += 1
+    key = str(n)
+    products.append({"key": key, "label": label, "price": price})
+    SETTINGS["products"] = products
+    SETTINGS.setdefault("prices", {})[key] = price
+    save_settings(SETTINGS)
+    return key
+
+
+def remove_product(key: str) -> bool:
+    products = get_products()
+    new_list = [p for p in products if p["key"] != key]
+    if len(new_list) == len(products):
+        return False
+    SETTINGS["products"] = new_list
+    if "prices" in SETTINGS and key in SETTINGS["prices"]:
+        del SETTINGS["prices"][key]
+    save_settings(SETTINGS)
+    return True
+
+
+def update_product_price(key: str, price: int) -> bool:
+    products = get_products()
+    found = False
+    for p in products:
+        if p["key"] == key:
+            p["price"] = price
+            found = True
+            break
+    if not found:
+        return False
+    SETTINGS["products"] = products
+    SETTINGS.setdefault("prices", {})[key] = price
+    save_settings(SETTINGS)
+    return True
 
 
 # ==================== رنگ دکمه‌ها ====================
@@ -254,9 +475,23 @@ def init_db():
         ("balance", "ALTER TABLE users ADD COLUMN balance INTEGER DEFAULT 0"),
         ("referral_discount_used", "ALTER TABLE users ADD COLUMN referral_discount_used INTEGER DEFAULT 0"),
         ("referral_discount_available", "ALTER TABLE users ADD COLUMN referral_discount_available INTEGER DEFAULT 0"),
+        ("invite_credited", "ALTER TABLE users ADD COLUMN invite_credited INTEGER DEFAULT 0"),
+        ("ref_configs_received", "ALTER TABLE users ADD COLUMN ref_configs_received INTEGER DEFAULT 0"),
+        ("ref_configs_owed", "ALTER TABLE users ADD COLUMN ref_configs_owed INTEGER DEFAULT 0"),
+        ("coins", "ALTER TABLE users ADD COLUMN coins INTEGER DEFAULT 0"),
     ]:
         try: c.execute(ddl)
         except: pass
+    # جدول مخزن کانفیگ‌های هدیه‌ی رفرال
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS referral_configs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_text TEXT NOT NULL,
+        claimed_by INTEGER,
+        claimed_at TEXT,
+        created_at TEXT
+        )"""
+    )
     c.execute(
         """CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -268,20 +503,12 @@ def init_db():
         status TEXT DEFAULT 'pending',
         config TEXT DEFAULT '',
         sub_link TEXT DEFAULT '',
-        ovpn_file_id TEXT DEFAULT '',
-        ovpn_user TEXT DEFAULT '',
-        ovpn_pass TEXT DEFAULT '',
-        ovpn_link TEXT DEFAULT '',
         created_at TEXT
         )"""
     )
     for col, ddl in [
         ("config", "ALTER TABLE receipts ADD COLUMN config TEXT DEFAULT ''"),
         ("sub_link", "ALTER TABLE receipts ADD COLUMN sub_link TEXT DEFAULT ''"),
-        ("ovpn_file_id", "ALTER TABLE receipts ADD COLUMN ovpn_file_id TEXT DEFAULT ''"),
-        ("ovpn_user", "ALTER TABLE receipts ADD COLUMN ovpn_user TEXT DEFAULT ''"),
-        ("ovpn_pass", "ALTER TABLE receipts ADD COLUMN ovpn_pass TEXT DEFAULT ''"),
-        ("ovpn_link", "ALTER TABLE receipts ADD COLUMN ovpn_link TEXT DEFAULT ''"),
     ]:
         try: c.execute(ddl)
         except: pass
@@ -325,6 +552,7 @@ def db_is_banned(user_id) -> bool:
 def db_set_ban(user_id, val: int):
     conn = db()
     c = conn.cursor()
+    # اگر کاربر قبلاً نبوده، اول می‌سازیم
     c.execute(
         "INSERT OR IGNORE INTO users (user_id, join_date) VALUES (?, ?)",
         (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
@@ -412,14 +640,10 @@ def db_get_user_receipts(user_id):
 
 
 def db_get_receipt(rid):
-    """برمی‌گرداند: id, user_id, product, username, amount, photo_id, status,
-    config, sub_link, ovpn_file_id, ovpn_user, ovpn_pass, ovpn_link, created_at"""
     conn = db()
     c = conn.cursor()
     c.execute(
-        "SELECT id, user_id, product, username, amount, photo_id, status, "
-        "config, sub_link, ovpn_file_id, ovpn_user, ovpn_pass, ovpn_link, created_at "
-        "FROM receipts WHERE id = ?",
+        "SELECT id, user_id, product, username, amount, photo_id, status, config, sub_link, created_at FROM receipts WHERE id = ?",
         (rid,),
     )
     r = c.fetchone()
@@ -435,23 +659,28 @@ def db_set_receipt_status(rid, status):
     conn.close()
 
 
-def db_set_receipt_field(rid, **fields):
-    if not fields:
-        return
+def db_set_receipt_config(rid, config="", sub_link=""):
     conn = db()
     c = conn.cursor()
-    sets = ", ".join(f"{k} = ?" for k in fields)
-    vals = list(fields.values()) + [rid]
-    c.execute(f"UPDATE receipts SET {sets} WHERE id = ?", vals)
+    fields, vals = [], []
+    if config:
+        fields.append("config = ?"); vals.append(config)
+    if sub_link:
+        fields.append("sub_link = ?"); vals.append(sub_link)
+    if not fields:
+        conn.close(); return
+    vals.append(rid)
+    c.execute(f"UPDATE receipts SET {', '.join(fields)} WHERE id = ?", tuple(vals))
     conn.commit()
     conn.close()
 
 
 def db_get_user_delivered_services(user_id):
+    """سرویس‌هایی که تایید شده‌اند (کانفیگ یا ساب دارند یا تایید شده‌اند)."""
     conn = db()
     c = conn.cursor()
     c.execute(
-        "SELECT id, product, username FROM receipts "
+        "SELECT id, product, username, config, sub_link FROM receipts "
         "WHERE user_id = ? AND status='approved' ORDER BY id DESC",
         (user_id,),
     )
@@ -463,7 +692,10 @@ def db_get_user_delivered_services(user_id):
 def db_get_user_info(user_id):
     conn = db()
     c = conn.cursor()
-    c.execute("SELECT balance, join_date FROM users WHERE user_id = ?", (user_id,))
+    c.execute(
+        "SELECT balance, join_date FROM users WHERE user_id = ?",
+        (user_id,),
+    )
     r = c.fetchone()
     c.execute(
         "SELECT COUNT(*) FROM receipts WHERE user_id = ? AND status='approved'",
@@ -474,6 +706,166 @@ def db_get_user_info(user_id):
     if not r:
         return {"balance": 0, "join_date": None, "services": 0}
     return {"balance": r[0] or 0, "join_date": r[1], "services": services}
+
+
+def db_get_users_page(page: int, per_page: int = 10, banned_only: bool = False):
+    """صفحه‌بندی کاربران. برمی‌گرداند: (rows, total_count).
+
+    هر row: (user_id, username, full_name, balance, is_banned, join_date, coins, refs_count)
+    """
+    conn = db()
+    c = conn.cursor()
+    where = "WHERE is_banned = 1" if banned_only else ""
+    c.execute(f"SELECT COUNT(*) FROM users {where}")
+    total = c.fetchone()[0]
+    offset = page * per_page
+    c.execute(
+        f"SELECT u.user_id, u.username, u.full_name, u.balance, u.is_banned, u.join_date, "
+        f"COALESCE(u.coins,0) AS coins, "
+        f"(SELECT COUNT(*) FROM users x WHERE x.invited_by = u.user_id AND x.invite_credited = 1) AS refs "
+        f"FROM users u {where} ORDER BY u.rowid DESC LIMIT ? OFFSET ?",
+        (per_page, offset),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows, total
+
+
+def db_get_user_full(user_id):
+    """اطلاعات کامل یک کاربر."""
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "SELECT user_id, username, full_name, balance, is_banned, join_date, "
+        "invited_by, invite_credited, ref_configs_received, ref_configs_owed, "
+        "COALESCE(coins,0) "
+        "FROM users WHERE user_id = ?",
+        (user_id,),
+    )
+    r = c.fetchone()
+    conn.close()
+    if not r:
+        return None
+    return {
+        "user_id": r[0],
+        "username": r[1],
+        "full_name": r[2],
+        "balance": r[3] or 0,
+        "is_banned": bool(r[4]),
+        "join_date": r[5],
+        "invited_by": r[6],
+        "invite_credited": r[7] or 0,
+        "ref_configs_received": r[8] or 0,
+        "ref_configs_owed": r[9] or 0,
+        "coins": r[10] or 0,
+    }
+
+
+def db_add_balance(user_id: int, amount: int):
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO users (user_id, join_date) VALUES (?, ?)",
+        (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    c.execute("UPDATE users SET balance = COALESCE(balance,0) + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+
+# ==================== 🪙 سیستم سکه ====================
+def db_get_coins(user_id: int) -> int:
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COALESCE(coins,0) FROM users WHERE user_id = ?", (user_id,))
+    r = c.fetchone()
+    conn.close()
+    return int(r[0]) if r else 0
+
+
+def db_add_coins(user_id: int, amount: int) -> int:
+    """امن: اگر کاربر وجود نداشته باشد ساخته می‌شود. کف صفر تضمین می‌شود.
+    خروجی: موجودی جدید."""
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO users (user_id, join_date) VALUES (?, ?)",
+        (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    c.execute(
+        "UPDATE users SET coins = MAX(0, COALESCE(coins,0) + ?) WHERE user_id = ?",
+        (amount, user_id),
+    )
+    c.execute("SELECT COALESCE(coins,0) FROM users WHERE user_id = ?", (user_id,))
+    r = c.fetchone()
+    conn.commit()
+    conn.close()
+    return int(r[0]) if r else 0
+
+
+def db_set_coins(user_id: int, amount: int) -> int:
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO users (user_id, join_date) VALUES (?, ?)",
+        (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    c.execute("UPDATE users SET coins = ? WHERE user_id = ?", (max(0, amount), user_id))
+    conn.commit()
+    conn.close()
+    return max(0, amount)
+
+
+def db_clear_all_coins() -> int:
+    """صفر کردن همگانی سکه‌ها. خروجی: تعداد ردیف‌های متاثر."""
+    conn = db()
+    c = conn.cursor()
+    c.execute("UPDATE users SET coins = 0 WHERE COALESCE(coins,0) > 0")
+    n = c.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
+def db_transfer_coins(from_uid: int, to_uid: int, amount: int) -> tuple[bool, str]:
+    """انتقال سکه با کسر از مبدا. خروجی: (موفق؟, پیام)."""
+    if amount <= 0:
+        return False, "مبلغ نامعتبر است."
+    if from_uid == to_uid:
+        return False, "مبدا و مقصد نمی‌توانند یکی باشند."
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COALESCE(coins,0) FROM users WHERE user_id = ?", (from_uid,))
+    rf = c.fetchone()
+    if not rf:
+        conn.close(); return False, "کاربر مبدا یافت نشد."
+    if int(rf[0]) < amount:
+        conn.close(); return False, f"موجودی سکه کاربر مبدا کافی نیست (موجودی: {int(rf[0])})."
+    # اگر مقصد نباشد، می‌سازیم
+    c.execute(
+        "INSERT OR IGNORE INTO users (user_id, join_date) VALUES (?, ?)",
+        (to_uid, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    c.execute("UPDATE users SET coins = COALESCE(coins,0) - ? WHERE user_id = ?", (amount, from_uid))
+    c.execute("UPDATE users SET coins = COALESCE(coins,0) + ? WHERE user_id = ?", (amount, to_uid))
+    conn.commit()
+    conn.close()
+    return True, "ok"
+
+
+def db_create_free_config_receipt(user_id: int, cfg: str) -> int:
+    """ثبت یک رسید تاییدشده برای کانفیگ رایگان تا در بخش «سرویس‌های من» نمایش داده شود."""
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO receipts (user_id, product, username, amount, photo_id, status, config, sub_link, created_at) "
+        "VALUES (?, 'free', 'کانفیگ رایگان', 0, '', 'approved', ?, '', ?)",
+        (user_id, cfg, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
 
 
 def db_count_referrals(user_id):
@@ -510,6 +902,166 @@ def db_grant_referral_discount(user_id):
     conn.close()
 
 
+def db_consume_referral_discount(user_id):
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE users SET referral_discount_available = MAX(0, COALESCE(referral_discount_available,0) - 1), "
+        "referral_discount_used = COALESCE(referral_discount_used,0) + 1 WHERE user_id = ?",
+        (user_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ===== رفرال جدید: اعتبار + مخزن کانفیگ =====
+def db_get_invited_by(user_id: int):
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT invited_by, invite_credited FROM users WHERE user_id = ?", (user_id,))
+    r = c.fetchone()
+    conn.close()
+    return r  # (invited_by, invite_credited) or None
+
+
+def db_mark_invite_credited(user_id: int):
+    conn = db()
+    c = conn.cursor()
+    c.execute("UPDATE users SET invite_credited = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def db_count_credited_referrals(inviter_id: int) -> int:
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) FROM users WHERE invited_by = ? AND invite_credited = 1",
+        (inviter_id,),
+    )
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+
+def db_add_referral_config(text: str) -> int:
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO referral_configs (config_text, created_at) VALUES (?, ?)",
+        (text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def db_pop_referral_config(claim_user_id: int):
+    """یک کانفیگ آزاد را برمی‌دارد و به نام کاربر می‌زند. None اگر مخزن خالی باشد."""
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, config_text FROM referral_configs WHERE claimed_by IS NULL ORDER BY id LIMIT 1"
+    )
+    r = c.fetchone()
+    if not r:
+        conn.close(); return None
+    cid, txt = r
+    c.execute(
+        "UPDATE referral_configs SET claimed_by = ?, claimed_at = ? WHERE id = ?",
+        (claim_user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), cid),
+    )
+    conn.commit()
+    conn.close()
+    return txt
+
+
+def db_count_unclaimed_configs() -> int:
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM referral_configs WHERE claimed_by IS NULL")
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+
+def db_count_claimed_configs() -> int:
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM referral_configs WHERE claimed_by IS NOT NULL")
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+
+def db_count_total_configs() -> int:
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM referral_configs")
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+
+def db_inc_owed(user_id: int, by: int = 1):
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE users SET ref_configs_owed = COALESCE(ref_configs_owed,0) + ? WHERE user_id = ?",
+        (by, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_dec_owed(user_id: int, by: int = 1):
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE users SET ref_configs_owed = MAX(0, COALESCE(ref_configs_owed,0) - ?) WHERE user_id = ?",
+        (by, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_inc_received(user_id: int, by: int = 1):
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE users SET ref_configs_received = COALESCE(ref_configs_received,0) + ? WHERE user_id = ?",
+        (by, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_user_ref_status(user_id: int):
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COALESCE(ref_configs_received,0), COALESCE(ref_configs_owed,0) FROM users WHERE user_id = ?",
+        (user_id,),
+    )
+    r = c.fetchone()
+    conn.close()
+    if not r:
+        return 0, 0
+    return r[0], r[1]
+
+
+def db_list_owed_users():
+    conn = db()
+    c = conn.cursor()
+    c.execute(
+        "SELECT user_id, COALESCE(ref_configs_owed,0) FROM users WHERE COALESCE(ref_configs_owed,0) > 0 ORDER BY user_id"
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
 def db_save_discount(code, percent):
     conn = db()
     c = conn.cursor()
@@ -531,8 +1083,23 @@ def db_get_discount(code):
 
 
 # ==================== کمک‌ها ====================
-def is_admin(user_id: int) -> bool:
+def is_super_admin(user_id: int) -> bool:
     return user_id in SUPER_ADMIN_IDS
+
+
+def is_admin(user_id: int) -> bool:
+    """ادمین سوپر یا ادمین جانبی."""
+    return is_super_admin(user_id) or (find_sub_admin(user_id) is not None)
+
+
+def has_perm(user_id: int, perm: str) -> bool:
+    """ادمین سوپر همه مجوزها را دارد. ادمین جانبی فقط مجوزهای فعالش."""
+    if is_super_admin(user_id):
+        return True
+    sa = find_sub_admin(user_id)
+    if not sa:
+        return False
+    return bool((sa.get("perms") or {}).get(perm, False))
 
 
 def fmt_price(amount: int) -> str:
@@ -542,17 +1109,17 @@ def fmt_price(amount: int) -> str:
 # ==================== کیبوردها ====================
 def kb_main(user_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [btn(BUTTON_LABELS["main_buy"], "main_buy", callback_data="buy_menu")],
+        [
+            btn(BUTTON_LABELS["main_buy"], "main_buy", callback_data="buy_menu"),
+            btn(BUTTON_LABELS["main_freeconf"], "main_freeconf", callback_data="freeconf"),
+        ],
         [
             btn(BUTTON_LABELS["main_my"], "main_my", callback_data="my_services"),
             btn(BUTTON_LABELS["main_account"], "main_account", callback_data="account"),
         ],
         [
+            btn(BUTTON_LABELS["main_invite"], "main_invite", callback_data="invite"),
             btn(BUTTON_LABELS["main_support"], "main_support", callback_data="support"),
-        ],
-        [
-            btn(BUTTON_LABELS["main_tut_openvpn"], "main_tut_openvpn", callback_data="tut_openvpn"),
-            btn(BUTTON_LABELS["main_tut_v2ray"], "main_tut_v2ray", callback_data="tut_v2ray"),
         ],
     ]
     if is_admin(user_id):
@@ -566,35 +1133,25 @@ def kb_back(target: str = "back_main") -> InlineKeyboardMarkup:
     )
 
 
-def kb_service_menu() -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="🛡 Open VPN", callback_data="svc_openvpn")],
-        [InlineKeyboardButton(text="⚡️ V2Ray", callback_data="svc_v2ray")],
-        [btn(BUTTON_LABELS["back"], "back", callback_data="back_main")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def kb_volume_menu(service: str) -> InlineKeyboardMarkup:
+def kb_buy_menu() -> InlineKeyboardMarkup:
     rows = []
-    for v in SERVICES[service]["volumes"]:
-        price = get_price(service, v)
+    for p in get_products():
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{fa_digits(v)} گیگ — {fmt_price(price)}",
-                    callback_data=f"prod_{service}_{v}",
+                    text=f"{p['label']} — {fmt_price(p['price'])}",
+                    callback_data=f"prod_{p['key']}",
                 )
             ]
         )
-    rows.append([btn(BUTTON_LABELS["back"], "back", callback_data="buy_menu")])
+    rows.append([btn(BUTTON_LABELS["back"], "back", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_invoice(product_key: str) -> InlineKeyboardMarkup:
+def kb_invoice(product: str) -> InlineKeyboardMarkup:
     rows = [
-        [btn(BUTTON_LABELS["pay_discount"], "pay_discount", callback_data=f"discount_{product_key}")],
-        [btn(BUTTON_LABELS["pay_card"], "pay_card", callback_data=f"paycard_{product_key}")],
+        [btn(BUTTON_LABELS["pay_discount"], "pay_discount", callback_data=f"discount_{product}")],
+        [btn(BUTTON_LABELS["pay_card"], "pay_card", callback_data=f"paycard_{product}")],
         [btn(BUTTON_LABELS["back"], "back", callback_data="buy_menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -611,40 +1168,92 @@ def kb_join_required() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_admin() -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="📊 آمار ربات", callback_data="adm_stats")],
-        [InlineKeyboardButton(text="📢 پیام همگانی", callback_data="adm_broadcast")],
-        [InlineKeyboardButton(text="✅ تایید همه رسیدها", callback_data="adm_approve_all")],
-        [
+def kb_admin(user_id: int | None = None) -> InlineKeyboardMarkup:
+    sales_on = SETTINGS.get("sales_enabled", True)
+    bot_on = SETTINGS.get("bot_enabled", True)
+    sales_label = "🟢 فروش: روشن (برای خاموش کردن بزنید)" if sales_on else "🔴 فروش: خاموش (برای روشن کردن بزنید)"
+    bot_label = "🟢 ربات: روشن (برای خاموش کردن بزنید)" if bot_on else "🔴 ربات: خاموش (برای روشن کردن بزنید)"
+
+    def can(p: str) -> bool:
+        # اگر شناسه کاربر داده نشده باشد، همه را نشان بده (سازگاری عقب‌رو)
+        if user_id is None:
+            return True
+        return has_perm(user_id, p)
+
+    rows = []
+    if can("stats"):
+        rows.append([InlineKeyboardButton(text="📊 آمار ربات", callback_data="adm_stats")])
+    if can("toggle_sales"):
+        rows.append([InlineKeyboardButton(text=sales_label, callback_data="adm_toggle_sales")])
+    if can("toggle_bot"):
+        rows.append([InlineKeyboardButton(text=bot_label, callback_data="adm_toggle_bot")])
+    if can("broadcast"):
+        rows.append([InlineKeyboardButton(text="📢 پیام همگانی", callback_data="adm_broadcast")])
+    if can("approve_receipts"):
+        rows.append([InlineKeyboardButton(text="✅ تایید همه رسیدها", callback_data="adm_approve_all")])
+    if can("users"):
+        rows.append([InlineKeyboardButton(text="👥 لیست کاربران", callback_data="adm_users_0")])
+    if can("ban"):
+        rows.append([
             InlineKeyboardButton(text="🚫 بن کردن کاربر", callback_data="adm_ban"),
             InlineKeyboardButton(text="🔓 آنبن کردن کاربر", callback_data="adm_unban"),
-        ],
-        [InlineKeyboardButton(text="🎁 ساخت کد تخفیف", callback_data="adm_discount")],
-        [InlineKeyboardButton(text="💵 تنظیم قیمت V2Ray", callback_data="adm_prices_v2ray")],
-        [InlineKeyboardButton(text="💵 تنظیم قیمت Open VPN", callback_data="adm_prices_openvpn")],
-        [InlineKeyboardButton(text="📚 آپلود آموزش Open VPN", callback_data="adm_uptut_openvpn")],
-        [InlineKeyboardButton(text="📚 آپلود آموزش V2Ray", callback_data="adm_uptut_v2ray")],
-        [InlineKeyboardButton(text="💳 تنظیم شماره کارت", callback_data="adm_card")],
-        [InlineKeyboardButton(text="🛟 تنظیم آیدی پشتیبانی", callback_data="adm_support")],
-        [InlineKeyboardButton(text="📡 تنظیم چنل جوین اجباری", callback_data="adm_channels")],
-        [btn(BUTTON_LABELS["back"], "back", callback_data="back_main")],
+        ])
+        rows.append([InlineKeyboardButton(text="📋 لیست کاربران بن‌شده", callback_data="adm_banlist_0")])
+    if can("discount"):
+        rows.append([InlineKeyboardButton(text="🎁 ساخت کد تخفیف", callback_data="adm_discount")])
+    if can("products") or can("prices"):
+        rows.append([InlineKeyboardButton(text="💵 مدیریت محصولات و قیمت‌ها", callback_data="adm_prices")])
+    if can("giftcfg"):
+        rows.append([InlineKeyboardButton(text="🎁 مدیریت کانفیگ‌های هدیه دعوت", callback_data="adm_giftcfg")])
+    if can("coins"):
+        rows.append([InlineKeyboardButton(text="🪙 مدیریت سکه‌ها", callback_data="adm_coins")])
+    if can("card"):
+        rows.append([InlineKeyboardButton(text="💳 تنظیم شماره کارت", callback_data="adm_card")])
+    if can("support_id"):
+        rows.append([InlineKeyboardButton(text="🛟 تنظیم آیدی پشتیبانی", callback_data="adm_support")])
+    if can("channels"):
+        rows.append([InlineKeyboardButton(text="📡 تنظیم چنل جوین اجباری", callback_data="adm_channels")])
+    if can("texts"):
+        rows.append([InlineKeyboardButton(text="✏️ مدیریت متن‌ها", callback_data="adm_texts")])
+    if can("buttons"):
+        rows.append([InlineKeyboardButton(text="🔘 مدیریت برچسب دکمه‌ها", callback_data="adm_buttons_0")])
+    if can("colors"):
+        rows.append([InlineKeyboardButton(text="🎨 تنظیم رنگ دکمه‌ها", callback_data="adm_colors")])
+    # مدیریت ادمین‌های جانبی فقط برای ادمین سوپر
+    if user_id is None or is_super_admin(user_id):
+        rows.append([InlineKeyboardButton(text="👤 مدیریت ادمین‌ها", callback_data="adm_subadmins")])
+    rows.append([btn(BUTTON_LABELS["back"], "back", callback_data="back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_admin_broadcast() -> InlineKeyboardMarkup:
+    """منوی پیام همگانی با گزینه‌های پین/بدون پین/حذف پین."""
+    rows = [
+        [InlineKeyboardButton(text="📌 پیام همگانی با پین", callback_data="adm_bc_pin")],
+        [InlineKeyboardButton(text="📨 پیام همگانی بدون پین", callback_data="adm_bc_nopin")],
+        [InlineKeyboardButton(text="🗑 حذف پین‌های قبلی", callback_data="adm_bc_unpin")],
+        [btn(BUTTON_LABELS["back"], "back", callback_data="admin_panel")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_admin_prices(service: str) -> InlineKeyboardMarkup:
+def kb_admin_prices() -> InlineKeyboardMarkup:
+    """مدیریت محصولات: تغییر قیمت + حذف + افزودن محصول جدید."""
     rows = []
-    for v in SERVICES[service]["volumes"]:
-        price = get_price(service, v)
+    for p in get_products():
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{fa_digits(v)} گیگ — {fmt_price(price)}",
-                    callback_data=f"setprice_{service}_{v}",
-                )
+                    text=f"✏️ {p['label']} — {fmt_price(p['price'])}",
+                    callback_data=f"setprice_{p['key']}",
+                ),
+                InlineKeyboardButton(
+                    text="🗑 حذف",
+                    callback_data=f"delprod_{p['key']}",
+                ),
             ]
         )
+    rows.append([InlineKeyboardButton(text="➕ افزودن محصول جدید (حجم + قیمت)", callback_data="addprod")])
     rows.append([btn(BUTTON_LABELS["back"], "back", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -663,15 +1272,37 @@ def kb_admin_channels() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def kb_admin_colors() -> InlineKeyboardMarkup:
+    rows = []
+    for key, label in BUTTON_LABELS.items():
+        if key == "back":
+            continue
+        cur = SETTINGS["colors"].get(key, "default")
+        emoji = {"primary": "🔵", "success": "🟢", "danger": "🔴", "default": "⚪"}.get(cur, "⚪")
+        rows.append(
+            [InlineKeyboardButton(text=f"{emoji} {label}", callback_data=f"color_{key}")]
+        )
+    rows.append([btn(BUTTON_LABELS["back"], "back", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_color_choice(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔵 آبی", callback_data=f"setcolor_{key}_primary"),
+                InlineKeyboardButton(text="🟢 سبز", callback_data=f"setcolor_{key}_success"),
+                InlineKeyboardButton(text="🔴 قرمز", callback_data=f"setcolor_{key}_danger"),
+            ],
+            [InlineKeyboardButton(text="⚪ معمولی (مات)", callback_data=f"setcolor_{key}_default")],
+            [btn(BUTTON_LABELS["back"], "back", callback_data="adm_colors")],
+        ]
+    )
+
+
 # ==================== متن خوش‌آمد ====================
 def welcome_text() -> str:
-    return (
-        "✨ به فروشگاه Px7 Vpn خوش آمدید!\n\n"
-        "🛡 ارائه انواع سرویس‌های VPN با کیفیت عالی\n"
-        "✅ تضمین امنیت ارتباطات شما\n"
-        "📞 پشتیبانی حرفه‌ای ۲۴ ساعته\n\n"
-        "از منوی زیر بخش مورد نظر خود را انتخاب کنید."
-    )
+    return get_text("welcome")
 
 
 # ==================== States ====================
@@ -693,18 +1324,65 @@ class AdminStates(StatesGroup):
     waiting_config = State()
     waiting_sub = State()
     broadcast_message = State()
-    # OpenVPN delivery
-    ovpn_waiting_file = State()
-    ovpn_waiting_user = State()
-    ovpn_waiting_pass = State()
-    ovpn_waiting_link = State()
-    # Tutorials
-    upload_tutorial = State()
+    broadcast_message_pin = State()
+    add_product_label = State()
+    add_product_price = State()
+    gift_count = State()
+    gift_text = State()
+    # ادمین جانبی
+    add_sub_admin = State()
+    # ویرایش متن‌ها
+    edit_text = State()
+    # ویرایش برچسب دکمه‌ها
+    edit_button_label = State()
+    # پیام به کاربر
+    msg_user_text = State()
+    # افزودن/کسر اعتبار
+    addbal_amount = State()
+    subbal_amount = State()
+    # 🪙 سکه
+    set_freeconf_coins = State()
+    transfer_coins_from = State()
+    transfer_coins_to = State()
+    transfer_coins_amount = State()
+    addcoins_amount = State()
+    subcoins_amount = State()
+    confirm_clear_coins = State()
 
 
 # ==================== Bot/Dispatcher ====================
 dp = Dispatcher(storage=MemoryStorage())
 bot: Bot | None = None
+
+
+# ===== Middleware: خاموش بودن ربات =====
+class BotEnabledMiddleware(BaseMiddleware):
+    """وقتی ربات خاموشه، به همه‌ی کاربران غیرادمین پیام بروزرسانی می‌دهد."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any],
+    ) -> Any:
+        # اگر ربات روشن است یا کاربر ادمین است، اجازه عبور بده
+        user = data.get("event_from_user")
+        if SETTINGS.get("bot_enabled", True) or (user and is_admin(user.id)):
+            return await handler(event, data)
+        # ربات خاموش، کاربر معمولی → پیام بروزرسانی
+        text = get_text("bot_off_alert")
+        try:
+            if isinstance(event, Message):
+                await event.answer(text)
+            elif isinstance(event, CallbackQuery):
+                await event.answer(text, show_alert=True)
+        except Exception as e:
+            logger.warning(f"bot-disabled notice failed: {e}")
+        return None
+
+
+dp.message.middleware(BotEnabledMiddleware())
+dp.callback_query.middleware(BotEnabledMiddleware())
 
 
 # ===== بررسی عضویت =====
@@ -720,6 +1398,107 @@ async def check_membership(user_id: int) -> bool:
             logger.warning(f"membership check failed for {ch}: {e}")
             return False
     return True
+
+
+# ==================== رفرال: اعتبار + تحویل کانفیگ هدیه ====================
+async def _send_gift_config(user_id: int, config_text: str):
+    """ارسال یک کانفیگ هدیه به کاربر."""
+    if not bot:
+        return
+    try:
+        await bot.send_message(
+            user_id,
+            "🎁 کانفیگ هدیه‌ی رفرال شما:\n\n"
+            f"<code>{config_text}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        logger.warning(f"send gift config to {user_id} failed: {e}")
+
+
+async def _award_one_gift(inviter_id: int) -> bool:
+    """تلاش برای تحویل یک کانفیگ آزاد به دعوت‌کننده.
+    اگر مخزن خالی باشد به جای آن «بدهی» ثبت می‌شود."""
+    cfg = db_pop_referral_config(inviter_id)
+    if cfg:
+        await _send_gift_config(inviter_id, cfg)
+        db_inc_received(inviter_id, 1)
+        return True
+    db_inc_owed(inviter_id, 1)
+    if bot:
+        try:
+            await bot.send_message(
+                inviter_id,
+                "🎁 با ۵ رفرال موفق، یک کانفیگ هدیه به شما تعلق گرفت!\n"
+                "ولی فعلاً موجودی کانفیگ نداریم؛ به‌محض شارژ شدن، خودکار برایتان ارسال می‌شود.",
+            )
+        except Exception:
+            pass
+    return False
+
+
+async def _credit_referral_if_eligible(new_user_id: int, new_user_name: str):
+    """بعد از احراز عضویت در چنل، اعتبار رفرال را به دعوت‌کننده می‌دهد.
+    🪙 هر دعوت موفق = N سکه (N از تنظیمات coins_per_referral، پیش‌فرض ۱).
+    کاربر می‌تواند با خرج سکه از منوی «کانفیگ رایگان» کانفیگ بگیرد."""
+    info = db_get_invited_by(new_user_id)
+    if not info:
+        return
+    inviter, credited = info
+    if not inviter or credited:
+        return
+    db_mark_invite_credited(new_user_id)
+    coins_per_ref = int(SETTINGS.get("coins_per_referral", 1) or 1)
+    new_balance = db_add_coins(inviter, coins_per_ref)
+    total = db_count_credited_referrals(inviter)
+    free_cost = int(SETTINGS.get("free_config_coins", 5) or 5)
+    # اطلاع لحظه‌ای به دعوت‌کننده
+    if bot:
+        try:
+            extra = ""
+            if new_balance >= free_cost:
+                extra = (
+                    f"\n\n🎁 شما می‌توانید با {fa_digits(free_cost)} سکه یک کانفیگ رایگان دریافت کنید!\n"
+                    f"از منوی اصلی ⇐ «کانفیگ رایگان»"
+                )
+            await bot.send_message(
+                inviter,
+                "🎉 یک رفرال جدید به ربات اضافه شد!\n"
+                f"👤 نام: {new_user_name}\n"
+                f"🪙 +{fa_digits(coins_per_ref)} سکه برای شما\n"
+                f"💰 موجودی سکه شما: {fa_digits(new_balance)}\n"
+                f"👥 جمع رفرال‌های شما: {fa_digits(total)}"
+                + extra,
+            )
+        except Exception as e:
+            logger.warning(f"notify inviter {inviter} failed: {e}")
+
+
+async def _distribute_owed_configs() -> int:
+    """تا زمانی که هم کاربر بدهکار داریم و هم کانفیگ آزاد، توزیع کن.
+    تعداد کانفیگ توزیع‌شده را برمی‌گرداند."""
+    delivered = 0
+    while True:
+        owed_users = db_list_owed_users()
+        if not owed_users:
+            break
+        if db_count_unclaimed_configs() <= 0:
+            break
+        progressed = False
+        for uid, owed in owed_users:
+            if owed <= 0:
+                continue
+            cfg = db_pop_referral_config(uid)
+            if not cfg:
+                break
+            await _send_gift_config(uid, cfg)
+            db_dec_owed(uid, 1)
+            db_inc_received(uid, 1)
+            delivered += 1
+            progressed = True
+        if not progressed:
+            break
+    return delivered
 
 
 # ==================== /start ====================
@@ -739,26 +1518,32 @@ async def cmd_start(message: Message, state: FSMContext):
     db_add_user(u.id, u.username, u.full_name, invited_by)
 
     if db_is_banned(u.id) and not is_admin(u.id):
-        await message.answer("⛔️ حساب شما مسدود شده است.")
+        await message.answer(get_text("banned"))
         return
 
     if not await check_membership(u.id):
         await message.answer(
-            "❌ برای استفاده از ربات لازم است در کانال زیر عضو شوید:",
+            get_text("join_required"),
             reply_markup=kb_join_required(),
         )
         return
 
-    await message.answer(welcome_text(), reply_markup=kb_main(u.id))
+    # عضو چنل است → اگر دعوت‌شده و هنوز اعتبار نگرفته، اعتبار بده
+    await _credit_referral_if_eligible(u.id, u.full_name or (u.username or "بدون نام"))
+
+    await message.answer(welcome_text(), reply_markup=kb_main(u.id), parse_mode=ParseMode.HTML)
 
 
 @dp.callback_query(F.data == "check_join")
 async def cb_check_join(call: CallbackQuery, state: FSMContext):
     await call.answer()
     if not await check_membership(call.from_user.id):
-        await call.answer("❌ هنوز عضو نشده‌اید!", show_alert=True)
+        await call.answer(get_text("not_joined"), show_alert=True)
         return
-    await call.message.edit_text(welcome_text(), reply_markup=kb_main(call.from_user.id))
+    # حالا که عضو چنل است، اعتبار رفرال را اعمال کن
+    u = call.from_user
+    await _credit_referral_if_eligible(u.id, u.full_name or (u.username or "بدون نام"))
+    await call.message.edit_text(welcome_text(), reply_markup=kb_main(call.from_user.id), parse_mode=ParseMode.HTML)
 
 
 @dp.callback_query(F.data == "back_main")
@@ -766,9 +1551,9 @@ async def cb_back_main(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer()
     try:
-        await call.message.edit_text(welcome_text(), reply_markup=kb_main(call.from_user.id))
+        await call.message.edit_text(welcome_text(), reply_markup=kb_main(call.from_user.id), parse_mode=ParseMode.HTML)
     except Exception:
-        await call.message.answer(welcome_text(), reply_markup=kb_main(call.from_user.id))
+        await call.message.answer(welcome_text(), reply_markup=kb_main(call.from_user.id), parse_mode=ParseMode.HTML)
 
 
 @dp.callback_query(F.data == "noop")
@@ -781,41 +1566,36 @@ async def cb_noop(call: CallbackQuery):
 async def cb_buy_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer()
-    txt = "🛒 کدوم سرویس می‌خوای؟\n\nیکی از سرویس‌های زیر را انتخاب کنید 👇"
-    await call.message.edit_text(txt, reply_markup=kb_service_menu())
-
-
-@dp.callback_query(F.data.startswith("svc_"))
-async def cb_select_service(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    service = call.data.split("_", 1)[1]
-    if service not in SERVICES:
+    # چک خاموش بودن فروش (ادمین مستثناست)
+    if not SETTINGS.get("sales_enabled", True) and not is_admin(call.from_user.id):
+        await call.message.edit_text(
+            get_text("sales_off"),
+            reply_markup=kb_back("back_main"),
+        )
         return
-    spec = SERVICES[service]["spec"]
     txt = (
-        f"📦 سرویس {SERVICES[service]['label']}\n"
-        f"📋 مشخصات: {spec}\n\n"
-        f"یکی از حجم‌های زیر را انتخاب کنید 👇"
+        "🛒 سرویس‌های فروشگاه ما\n"
+        "با تضمین کیفیت در بدترین شرایط\n\n"
+        "یکی از پکیج‌های زیر را انتخاب کنید 👇"
     )
-    await call.message.edit_text(txt, reply_markup=kb_volume_menu(service))
+    await call.message.edit_text(txt, reply_markup=kb_buy_menu())
 
 
 @dp.callback_query(F.data.startswith("prod_"))
 async def cb_select_product(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    parts = call.data.split("_", 2)
-    if len(parts) < 3:
+    product = call.data.split("_", 1)[1]
+    if not get_product(product):
         return
-    service, vol = parts[1], parts[2]
-    if service not in SERVICES or vol not in SERVICES[service]["volumes"]:
+    if not SETTINGS.get("sales_enabled", True) and not is_admin(call.from_user.id):
+        await call.answer(get_text("sales_off").split("\n")[0], show_alert=True)
         return
-    product_key = f"{service}_{vol}"
-    await state.update_data(product=product_key, discount_percent=0)
+    await state.update_data(product=product, discount_percent=0)
     await state.set_state(BuyStates.waiting_username)
     await call.message.edit_text(
-        f"🛒 سرویس {product_label(service, vol)} انتخاب شد.\n\n"
+        f"🛒 سرویس {get_product_label(product)} انتخاب شد.\n\n"
         "لطفا یک نام کاربری با حروف لاتین به طول حداکثر ۲۰ کاراکتر وارد نمایید 👇",
-        reply_markup=kb_back(f"svc_{service}"),
+        reply_markup=kb_back("buy_menu"),
     )
 
 
@@ -826,20 +1606,18 @@ async def msg_get_username(message: Message, state: FSMContext):
         await message.answer("❌ نام کاربری نامعتبر است. فقط حروف لاتین/عدد، ۳ تا ۲۰ کاراکتر.")
         return
     data = await state.get_data()
-    product_key = data["product"]
-    service, vol = parse_product(product_key)
-    base = get_price(service, vol)
+    product = data["product"]
+    base = get_product_price(product)
     discount = data.get("discount_percent", 0)
     final = int(base * (100 - discount) / 100)
     await state.update_data(username=text, base_price=base, final_price=final)
 
-    spec = SERVICES[service]["spec"]
     invoice = (
         f"🧾 پیش‌فاکتور\n\n"
         f"👤 نام کاربری: <code>{text}</code>\n"
-        f"📦 سرویس: {product_label(service, vol)}\n"
-        f"📋 مشخصات: {spec}\n"
-        f"💾 حجم: {fa_digits(vol)} گیگابایت\n\n"
+        f"📦 سرویس: {get_product_label(product)}\n"
+        f"📅 مدت اعتبار: نامحدود\n"
+        f"💾 حجم: {get_product_label(product)}\n\n"
     )
     if discount:
         invoice += f"💸 تخفیف: {discount}٪\n"
@@ -847,15 +1625,15 @@ async def msg_get_username(message: Message, state: FSMContext):
     invoice += f"💰 مبلغ قابل پرداخت: <b>{fmt_price(final)}</b>\n\n"
     invoice += "سفارش شما آماده پرداخت است."
 
-    await message.answer(invoice, reply_markup=kb_invoice(product_key), parse_mode=ParseMode.HTML)
+    await message.answer(invoice, reply_markup=kb_invoice(product), parse_mode=ParseMode.HTML)
 
 
 # ===== کد تخفیف =====
 @dp.callback_query(F.data.startswith("discount_"))
 async def cb_apply_discount(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    product_key = call.data.split("_", 1)[1]
-    await state.update_data(product=product_key)
+    product = call.data.split("_", 1)[1]
+    await state.update_data(product=product)
     await state.set_state(BuyStates.waiting_discount_code)
     await call.message.answer("🎁 لطفاً کد تخفیف خود را ارسال کنید 👇")
 
@@ -868,63 +1646,61 @@ async def msg_discount_code(message: Message, state: FSMContext):
         await message.answer("❌ کد تخفیف معتبر نیست.")
         return
     data = await state.get_data()
-    product_key = data.get("product")
-    if not product_key:
+    product = data.get("product")
+    if not product:
         await message.answer("❌ خطا. /start را بزنید.")
         await state.clear()
         return
-    service, vol = parse_product(product_key)
-    base = get_price(service, vol)
+    base = get_product_price(product)
     final = int(base * (100 - percent) / 100)
     await state.update_data(discount_percent=percent, base_price=base, final_price=final)
+    # برمی‌گردیم به مرحله دریافت یوزرنیم اگر هنوز ندارد
     if not data.get("username"):
         await state.set_state(BuyStates.waiting_username)
         await message.answer(
             f"✅ کد تخفیف {percent}٪ اعمال شد.\n\n"
-            "حالا یک نام کاربری با حروف لاتین (۳ تا ۲۰ کاراکتر) ارسال کنید 👇"
+            f"حالا یک نام کاربری با حروف لاتین (۳ تا ۲۰ کاراکتر) ارسال کنید 👇"
         )
     else:
         username = data["username"]
-        spec = SERVICES[service]["spec"]
         invoice = (
             f"🧾 پیش‌فاکتور\n\n"
             f"👤 نام کاربری: <code>{username}</code>\n"
-            f"📦 سرویس: {product_label(service, vol)}\n"
-            f"📋 مشخصات: {spec}\n"
-            f"💾 حجم: {fa_digits(vol)} گیگابایت\n\n"
+            f"📦 سرویس: {get_product_label(product)}\n"
+            f"📅 مدت اعتبار: نامحدود\n"
+            f"💾 حجم: {get_product_label(product)}\n\n"
             f"💸 تخفیف: {percent}٪\n"
             f"💵 قیمت اصلی: {fmt_price(base)}\n"
             f"💰 مبلغ قابل پرداخت: <b>{fmt_price(final)}</b>"
         )
-        await message.answer(invoice, reply_markup=kb_invoice(product_key), parse_mode=ParseMode.HTML)
+        await message.answer(invoice, reply_markup=kb_invoice(product), parse_mode=ParseMode.HTML)
 
 
 # ===== کارت به کارت =====
 @dp.callback_query(F.data.startswith("paycard_"))
 async def cb_pay_card(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    product_key = call.data.split("_", 1)[1]
+    product = call.data.split("_", 1)[1]
     data = await state.get_data()
     if not data.get("username"):
         await call.answer("ابتدا نام کاربری را وارد کنید.", show_alert=True)
         return
-    service, vol = parse_product(product_key)
-    final = data.get("final_price") or get_price(service, vol)
+    final = data.get("final_price") or get_product_price(product)
     card = SETTINGS.get("card_number") or "تنظیم نشده"
     holder = SETTINGS.get("card_holder") or ""
     holder_line = f"به نام: {holder}" if holder else ""
     txt = (
-        f"برای پرداخت، مبلغ {fmt_price(final)} را به شماره‌ی کارت زیر واریز کنید 👇🏻\n\n"
+        f"برای افزایش موجودی، مبلغ {fmt_price(final)} را به شماره‌ی حساب زیر واریز کنید 👇🏻\n\n"
         f"====================\n\n"
         f"<code>{card}</code>\n"
         f"{holder_line}\n\n"
         f"====================\n\n"
-        f"🟢 این تراکنش به مدت یک ساعت اعتبار دارد.\n"
-        f"‼️ مسئولیت واریز اشتباهی با شماست.\n"
-        f"🔝 بعد از پرداخت دکمه (ادامه مراحل) را بزنید و عکس رسید خود را ارسال کنید."
+        f"🟢این تراکنش به مدت یک ساعت اعتبار دارد پس از آن امکان پرداخت این تراکنش امکان ندارد.\n"
+        f"‼️مسئولیت واریز اشتباهی با شماست.\n"
+        f"🔝بعد از پرداخت دکمه (ادامه مراحل) رو بزنید و عکس رسید خود را ارسال کنید تا موجودیتون افزایش داده بشه."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📸 ادامه مراحل (ارسال رسید)", callback_data=f"sendreceipt_{product_key}")],
+        [InlineKeyboardButton(text="📸 ادامه مراحل (ارسال رسید)", callback_data=f"sendreceipt_{product}")],
         [btn(BUTTON_LABELS["back"], "back", callback_data="back_main")],
     ])
     await call.message.answer(txt, parse_mode=ParseMode.HTML, reply_markup=kb)
@@ -940,50 +1716,38 @@ async def cb_send_receipt(call: CallbackQuery, state: FSMContext):
 @dp.message(BuyStates.waiting_receipt, F.photo)
 async def msg_receipt(message: Message, state: FSMContext):
     data = await state.get_data()
-    product_key = data.get("product")
+    product = data.get("product")
     username = data.get("username")
     final = data.get("final_price")
-    if not (product_key and username and final):
+    if not (product and username and final):
         await message.answer("❌ خطا. لطفاً از ابتدا اقدام کنید: /start")
         await state.clear()
         return
-    service, vol = parse_product(product_key)
     photo_id = message.photo[-1].file_id
-    rid = db_create_receipt(message.from_user.id, product_key, username, final, photo_id)
+    rid = db_create_receipt(message.from_user.id, product, username, final, photo_id)
     await message.answer(
         "✅ اوکی! رسید شما دریافت شد.\n"
         "💳 پرداخت شما در سریع‌ترین زمان ممکن تایید می‌شود."
     )
+    # ارسال به ادمین‌ها با چهار دکمه
     caption = (
         f"🧾 رسید جدید #{rid}\n"
         f"👤 کاربر: {message.from_user.full_name}\n"
         f"🆔 آیدی: <code>{message.from_user.id}</code>\n"
-        f"📦 سرویس: {product_label(service, vol)}\n"
+        f"📦 سرویس: {get_product_label(product)}\n"
         f"🧾 یوزرنیم: <code>{username}</code>\n"
         f"💰 مبلغ: {fmt_price(final)}"
     )
-    if service == "openvpn":
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ تایید رسید", callback_data=f"adm_approve_{rid}"),
-                InlineKeyboardButton(text="❌ رد رسید", callback_data=f"adm_reject_{rid}"),
-            ],
-            [
-                InlineKeyboardButton(text="📁 فایل + یوزر/پسورد", callback_data=f"adm_ovpnfile_{rid}"),
-                InlineKeyboardButton(text="🔗 لینک", callback_data=f"adm_ovpnlink_{rid}"),
-            ],
-        ])
-    else:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ تایید رسید", callback_data=f"adm_approve_{rid}"),
-                InlineKeyboardButton(text="❌ رد رسید", callback_data=f"adm_reject_{rid}"),
-            ],
-            [
-                InlineKeyboardButton(text="📦 کانفیگ + ساب", callback_data=f"adm_cfgsub_{rid}"),
-                InlineKeyboardButton(text="📦 کانفیگ", callback_data=f"adm_cfg_{rid}"),
-            ],
-        ])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ تایید رسید", callback_data=f"adm_approve_{rid}"),
+            InlineKeyboardButton(text="❌ رد رسید", callback_data=f"adm_reject_{rid}"),
+        ],
+        [
+            InlineKeyboardButton(text="📦 کانفیگ + ساب", callback_data=f"adm_cfgsub_{rid}"),
+            InlineKeyboardButton(text="📦 کانفیگ", callback_data=f"adm_cfg_{rid}"),
+        ],
+    ])
     for aid in SUPER_ADMIN_IDS:
         try:
             await bot.send_photo(aid, photo_id, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -997,7 +1761,7 @@ async def msg_receipt_wrong(message: Message):
     await message.answer("📸 لطفاً عکس رسید را به صورت تصویر ارسال کنید.")
 
 
-# ==================== سرویس‌های من ====================
+# ==================== سرویس‌های من / حساب / دعوت / پشتیبانی ====================
 @dp.callback_query(F.data == "my_services")
 async def cb_my_services(call: CallbackQuery):
     await call.answer()
@@ -1010,52 +1774,44 @@ async def cb_my_services(call: CallbackQuery):
         return
     btns = []
     for r in rows[:20]:
-        rid, product, username = r
-        service, vol = parse_product(product)
+        rid, product, username, config, sub_link = r
         btns.append([InlineKeyboardButton(
-            text=f"👤 {username}  |  {product_label(service, vol)}",
-            callback_data=f"viewsvc_{rid}",
+            text=f"👤 {username}  |  {get_product_label(product)}",
+            callback_data=f"svc_{rid}",
         )])
     btns.append([btn(BUTTON_LABELS["back"], "back", callback_data="back_main")])
     await call.message.edit_text("📦 سرویس‌های شما:\nروی نام کاربری بزنید 👇", reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
 
 
-@dp.callback_query(F.data.startswith("viewsvc_"))
+@dp.callback_query(F.data.startswith("svc_"))
 async def cb_view_service(call: CallbackQuery):
     await call.answer()
     rid = int(call.data.split("_", 1)[1])
     r = db_get_receipt(rid)
     if not r or r[1] != call.from_user.id:
         await call.answer("یافت نشد", show_alert=True); return
-    (_, _, product, username, amount, _, status,
-     config, sub_link, ovpn_file_id, ovpn_user, ovpn_pass, ovpn_link, _) = r
-    service, vol = parse_product(product)
-    spec = SERVICES.get(service, {}).get("spec", "")
-    txt = (
-        f"📦 سرویس شما\n\n"
-        f"👤 نام کاربری: <code>{username}</code>\n"
-        f"📦 سرویس: {product_label(service, vol)}\n"
-        f"📋 مشخصات: {spec}\n"
-        f"💾 حجم: {fa_digits(vol)} گیگابایت\n"
-        f"💰 مبلغ پرداختی: {fmt_price(amount)}"
-    )
+    _, _, product, username, amount, _, status, config, sub_link, created = r
+    if product == "free":
+        txt = (
+            f"🎁 کانفیگ رایگان شما\n\n"
+            f"💎 نوع: کانفیگ هدیه (با سکه)\n"
+            f"📅 مدت اعتبار: نامحدود"
+        )
+    else:
+        txt = (
+            f"📦 سرویس شما\n\n"
+            f"👤 نام کاربری: <code>{username}</code>\n"
+            f"💾 حجم: {product} گیگابایت\n"
+            f"📅 مدت اعتبار: نامحدود\n"
+            f"💰 مبلغ پرداختی: {fmt_price(amount)}"
+        )
     rows = []
-    if service == "v2ray":
-        if sub_link:
-            rows.append([InlineKeyboardButton(text="🔗 دریافت لینک ساب", callback_data=f"getsub_{rid}")])
-        if config:
-            rows.append([InlineKeyboardButton(text="📄 دریافت کانفیگ", callback_data=f"getcfg_{rid}")])
-        if not rows:
-            txt += "\n\n⏳ کانفیگ هنوز برای شما ارسال نشده. لطفاً صبور باشید."
-    else:  # openvpn
-        if ovpn_file_id:
-            rows.append([InlineKeyboardButton(text="📁 دریافت فایل", callback_data=f"getovpnfile_{rid}")])
-        if ovpn_user or ovpn_pass:
-            rows.append([InlineKeyboardButton(text="🔑 یوزر/پسورد", callback_data=f"getovpnup_{rid}")])
-        if ovpn_link:
-            rows.append([InlineKeyboardButton(text="🔗 دریافت لینک", callback_data=f"getovpnlink_{rid}")])
-        if not rows:
-            txt += "\n\n⏳ سرویس هنوز برای شما ارسال نشده. لطفاً صبور باشید."
+    if sub_link:
+        rows.append([InlineKeyboardButton(text="🔗 دریافت لینک ساب", callback_data=f"getsub_{rid}")])
+    if config:
+        rows.append([InlineKeyboardButton(text="📄 دریافت لینک بدون ساب", callback_data=f"getcfg_{rid}")])
+    if not rows:
+        txt += "\n\n⏳ کانفیگ هنوز برای شما ارسال نشده. لطفاً صبور باشید."
     rows.append([btn(BUTTON_LABELS["back"], "back", callback_data="my_services")])
     await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode=ParseMode.HTML)
 
@@ -1086,57 +1842,12 @@ async def cb_get_cfg(call: CallbackQuery):
     await call.message.answer(f"📄 کانفیگ شما:\n\n<code>{cfg}</code>", parse_mode=ParseMode.HTML)
 
 
-@dp.callback_query(F.data.startswith("getovpnfile_"))
-async def cb_get_ovpn_file(call: CallbackQuery):
-    rid = int(call.data.split("_", 1)[1])
-    r = db_get_receipt(rid)
-    if not r or r[1] != call.from_user.id:
-        await call.answer("یافت نشد", show_alert=True); return
-    fid = r[9]
-    if not fid:
-        await call.answer("فایل موجود نیست.", show_alert=True); return
-    await call.answer()
-    try:
-        await bot.send_document(call.from_user.id, fid, caption="📁 فایل سرویس شما")
-    except Exception:
-        await call.message.answer("❌ ارسال فایل ناموفق بود.")
-
-
-@dp.callback_query(F.data.startswith("getovpnup_"))
-async def cb_get_ovpn_up(call: CallbackQuery):
-    rid = int(call.data.split("_", 1)[1])
-    r = db_get_receipt(rid)
-    if not r or r[1] != call.from_user.id:
-        await call.answer("یافت نشد", show_alert=True); return
-    user = r[10]; pwd = r[11]
-    await call.answer()
-    await call.message.answer(
-        f"🔑 اطلاعات اتصال شما:\n\n"
-        f"👤 یوزر: <code>{user}</code>\n"
-        f"🔒 پسورد: <code>{pwd}</code>",
-        parse_mode=ParseMode.HTML,
-    )
-
-
-@dp.callback_query(F.data.startswith("getovpnlink_"))
-async def cb_get_ovpn_link(call: CallbackQuery):
-    rid = int(call.data.split("_", 1)[1])
-    r = db_get_receipt(rid)
-    if not r or r[1] != call.from_user.id:
-        await call.answer("یافت نشد", show_alert=True); return
-    lnk = r[12]
-    if not lnk:
-        await call.answer("لینک موجود نیست.", show_alert=True); return
-    await call.answer()
-    await call.message.answer(f"🔗 لینک شما:\n\n<code>{lnk}</code>", parse_mode=ParseMode.HTML)
-
-
-# ==================== حساب / دعوت / پشتیبانی ====================
 @dp.callback_query(F.data == "account")
 async def cb_account(call: CallbackQuery):
     await call.answer()
     u = call.from_user
     info = db_get_user_info(u.id)
+    # تبدیل تاریخ ورود
     if info["join_date"]:
         try:
             jd = datetime.strptime(info["join_date"], "%Y-%m-%d %H:%M:%S")
@@ -1147,10 +1858,10 @@ async def cb_account(call: CallbackQuery):
         join_str = "—"
     now_str = jalali_datetime()
     txt = (
-        "👨🏻‍💻 اطلاعات حساب کاربری شما:\n\n"
+        "👨🏻‍💻اطلاعات حساب کاربری شما:\n\n"
         f"💰 موجودی: {fa_digits('{:,}'.format(info['balance']))} تومان\n\n"
-        f"🕴🏻 آیدی عددی: {fa_digits(u.id)}\n"
-        f"🛍 تعداد سرویس‌ها: {fa_digits(info['services'])}\n"
+        f"🕴🏻آیدی عددی : {fa_digits(u.id)}\n"
+        f"🛍 تعداد سرویس ها: {fa_digits(info['services'])}\n"
         f"🗓 تاریخ ورود به بات: {join_str}\n\n"
         f"📆 {now_str}"
     )
@@ -1162,18 +1873,89 @@ async def cb_invite(call: CallbackQuery):
     await call.answer()
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{call.from_user.id}"
-    refs = db_count_referrals(call.from_user.id)
-    avail, used = db_get_referral_discount(call.from_user.id)
+    refs = db_count_credited_referrals(call.from_user.id)
+    received, owed = db_get_user_ref_status(call.from_user.id)
+    coins = db_get_coins(call.from_user.id)
+    coins_per_ref = int(SETTINGS.get("coins_per_referral", 1) or 1)
+    free_cost = int(SETTINGS.get("free_config_coins", 5) or 5)
+    remain_coins = max(0, free_cost - coins)
     txt = (
         "🤝 دعوت دوستان\n\n"
-        "با هر رفرالی که می‌آورید، اگر آن کاربر از ربات خرید کند، یک کد تخفیف "
-        "<b>۱۰٪</b> به شما تعلق می‌گیرد که فقط <b>یک بار</b> روی <b>یک محصول</b> قابل استفاده است.\n\n"
-        f"👥 تعداد رفرال‌های شما: {fa_digits(refs)}\n"
-        f"🎁 تخفیف‌های آماده استفاده: {fa_digits(avail)}\n"
-        f"✅ تخفیف‌های استفاده‌شده: {fa_digits(used)}\n\n"
+        f"🪙 با هر دعوت موفق <b>{fa_digits(coins_per_ref)} سکه</b> دریافت می‌کنید.\n"
+        f"🎁 با <b>{fa_digits(free_cost)} سکه</b> می‌توانید یک <b>کانفیگ رایگان</b> از منوی اصلی دریافت کنید.\n\n"
+        "⚠️ توجه: اگر کاربری استارت بزند ولی عضو کانال نشود، رفرال شما حساب نمی‌شود.\n\n"
+        f"👥 رفرال‌های تأییدشده: {fa_digits(refs)}\n"
+        f"🪙 موجودی سکه شما: <b>{fa_digits(coins)}</b>\n"
+        f"⏳ تا کانفیگ بعدی: {fa_digits(remain_coins)} سکه دیگر\n"
+        f"🎁 کانفیگ‌های دریافت‌شده: {fa_digits(received)}\n"
+        f"📦 کانفیگ‌های در انتظار تحویل: {fa_digits(owed)}\n\n"
         f"🔗 لینک دعوت شما:\n<code>{link}</code>"
     )
     await call.message.edit_text(txt, reply_markup=kb_back("back_main"), parse_mode=ParseMode.HTML)
+
+
+# ==================== 🎁 کانفیگ رایگان (با سکه) ====================
+@dp.callback_query(F.data == "freeconf")
+async def cb_freeconf(call: CallbackQuery):
+    await call.answer()
+    coins_needed = int(SETTINGS.get("free_config_coins", 5) or 5)
+    user_coins = db_get_coins(call.from_user.id)
+    in_pool = db_count_unclaimed_configs()
+    txt = (
+        "🎁 <b>کانفیگ رایگان</b>\n\n"
+        f"🪙 برای دریافت کانفیگ رایگان به <b>{fa_digits(coins_needed)} سکه</b> نیاز دارید.\n"
+        f"💰 موجودی سکه شما: <b>{fa_digits(user_coins)}</b>\n\n"
+        "💡 با هر دعوت موفق دوستان به ربات، یک سکه دریافت می‌کنید."
+    )
+    rows = []
+    if user_coins >= coins_needed:
+        if in_pool > 0:
+            rows.append([InlineKeyboardButton(
+                text=f"✅ دریافت کانفیگ رایگان ({fa_digits(coins_needed)} سکه)",
+                callback_data="freeconf_claim",
+            )])
+        else:
+            txt += "\n\n⚠️ در حال حاضر کانفیگی در مخزن موجود نیست. لطفاً بعداً مراجعه کنید."
+    else:
+        remaining = coins_needed - user_coins
+        txt += f"\n\n⏳ <b>{fa_digits(remaining)} سکه</b> دیگر نیاز دارید. دوستان خود را دعوت کنید!"
+        rows.append([InlineKeyboardButton(text="🤝 دعوت دوستان", callback_data="invite")])
+    rows.append([btn(BUTTON_LABELS["back"], "back", callback_data="back_main")])
+    await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(F.data == "freeconf_claim")
+async def cb_freeconf_claim(call: CallbackQuery):
+    coins_needed = int(SETTINGS.get("free_config_coins", 5) or 5)
+    user_coins = db_get_coins(call.from_user.id)
+    if user_coins < coins_needed:
+        await call.answer("❌ موجودی سکه شما کافی نیست.", show_alert=True)
+        return
+    cfg = db_pop_referral_config(call.from_user.id)
+    if not cfg:
+        await call.answer("⚠️ مخزن کانفیگ خالی است. بعداً مراجعه کنید.", show_alert=True)
+        return
+    # کسر سکه + ثبت در سرویس‌های من
+    new_balance = db_add_coins(call.from_user.id, -coins_needed)
+    db_inc_received(call.from_user.id, 1)
+    rid = db_create_free_config_receipt(call.from_user.id, cfg)
+    await call.answer("✅ کانفیگ رایگان شما آماده شد!", show_alert=False)
+    try:
+        await call.message.edit_text(
+            f"🎁 <b>کانفیگ رایگان شما</b>\n\n"
+            f"<code>{cfg}</code>\n\n"
+            f"🪙 سکه‌های کسرشده: <b>{fa_digits(coins_needed)}</b>\n"
+            f"💰 موجودی سکه باقی‌مانده: <b>{fa_digits(new_balance)}</b>\n\n"
+            "✅ این کانفیگ به بخش «📦 سرویس‌های من» اضافه شد.",
+            reply_markup=kb_back("back_main"),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        await call.message.answer(
+            f"🎁 کانفیگ رایگان شما:\n\n<code>{cfg}</code>\n\n"
+            f"💰 موجودی سکه باقی‌مانده: {fa_digits(new_balance)}",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 @dp.callback_query(F.data == "support")
@@ -1184,48 +1966,6 @@ async def cb_support(call: CallbackQuery):
     await call.message.edit_text(txt, reply_markup=kb_back("back_main"))
 
 
-# ==================== آموزش ====================
-async def _send_tutorials(chat_id: int, service: str):
-    items = SETTINGS.get("tutorials", {}).get(service, [])
-    if not items:
-        await bot.send_message(
-            chat_id,
-            f"📚 هنوز آموزشی برای {SERVICES[service]['label']} ثبت نشده است.",
-        )
-        return
-    for it in items:
-        t = it.get("type")
-        fid = it.get("file_id", "")
-        cap = it.get("text", "") or None
-        try:
-            if t == "photo":
-                await bot.send_photo(chat_id, fid, caption=cap)
-            elif t == "video":
-                await bot.send_video(chat_id, fid, caption=cap)
-            elif t == "document":
-                await bot.send_document(chat_id, fid, caption=cap)
-            elif t == "text":
-                await bot.send_message(chat_id, cap or "")
-            else:
-                pass
-        except Exception as e:
-            logger.warning(f"send tutorial failed: {e}")
-
-
-@dp.callback_query(F.data == "tut_openvpn")
-async def cb_tut_openvpn(call: CallbackQuery):
-    await call.answer()
-    await call.message.answer(f"📚 آموزش {SERVICES['openvpn']['label']}:")
-    await _send_tutorials(call.from_user.id, "openvpn")
-
-
-@dp.callback_query(F.data == "tut_v2ray")
-async def cb_tut_v2ray(call: CallbackQuery):
-    await call.answer()
-    await call.message.answer(f"📚 آموزش {SERVICES['v2ray']['label']}:")
-    await _send_tutorials(call.from_user.id, "v2ray")
-
-
 # ==================== پنل مدیریت ====================
 @dp.callback_query(F.data == "admin_panel")
 async def cb_admin_panel(call: CallbackQuery, state: FSMContext):
@@ -1234,29 +1974,38 @@ async def cb_admin_panel(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         await call.answer("❌ دسترسی ندارید.", show_alert=True)
         return
-    await call.message.edit_text("👑 پنل مدیریت", reply_markup=kb_admin())
+    await call.message.edit_text("👑 پنل مدیریت", reply_markup=kb_admin(call.from_user.id))
 
 
+# آمار
 @dp.callback_query(F.data == "adm_stats")
 async def cb_adm_stats(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("❌", show_alert=True); return
     await call.answer()
     s = db_stats()
+    total_cfg = db_count_total_configs()
+    claimed_cfg = db_count_claimed_configs()
+    unclaimed_cfg = db_count_unclaimed_configs()
     txt = (
         "📊 آمار ربات\n\n"
-        f"👥 کل کاربران: {s['total_users']}\n"
-        f"🆕 کاربران امروز: {s['new_today']}\n"
-        f"⛔ کاربران بن: {s['banned']}\n\n"
-        f"🧾 کل رسیدها: {s['total_receipts']}\n"
-        f"✅ تاییدشده: {s['approved']}\n"
-        f"⏳ در انتظار: {s['pending']}\n"
+        f"👥 کل کاربران: {fa_digits(s['total_users'])}\n"
+        f"🆕 کاربران امروز: {fa_digits(s['new_today'])}\n"
+        f"⛔ کاربران بن: {fa_digits(s['banned'])}\n\n"
+        f"🧾 کل رسیدها: {fa_digits(s['total_receipts'])}\n"
+        f"✅ تاییدشده: {fa_digits(s['approved'])}\n"
+        f"⏳ در انتظار: {fa_digits(s['pending'])}\n"
         f"💰 مجموع فروش تاییدشده: {fmt_price(s['revenue'])}\n\n"
-        f"🎁 کدهای تخفیف فعال: {s['discounts']}"
+        f"🎁 کدهای تخفیف فعال: {fa_digits(s['discounts'])}\n\n"
+        "🎁 کانفیگ‌های هدیه دعوت:\n"
+        f"   • کل ثبت‌شده: {fa_digits(total_cfg)}\n"
+        f"   • گرفته‌شده توسط کاربران: {fa_digits(claimed_cfg)}\n"
+        f"   • نگرفته‌شده (مانده در مخزن): {fa_digits(unclaimed_cfg)}"
     )
     await call.message.edit_text(txt, reply_markup=kb_back("admin_panel"))
 
 
+# تایید همه رسیدها
 @dp.callback_query(F.data == "adm_approve_all")
 async def cb_adm_approve_all(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1267,12 +2016,11 @@ async def cb_adm_approve_all(call: CallbackQuery):
     for rid, uid, product, username, amount in pending:
         db_approve_receipt(rid)
         count += 1
-        service, vol = parse_product(product)
         try:
             await bot.send_message(
                 uid,
                 f"✅ رسید #{rid} شما تایید شد!\n"
-                f"📦 سرویس: {product_label(service, vol)}\n"
+                f"📦 سرویس: {get_product_label(product)}\n"
                 f"👤 یوزرنیم: <code>{username}</code>\n"
                 f"💰 مبلغ: {fmt_price(amount)}\n\n"
                 f"به‌زودی سرویس برای شما ارسال می‌شود.",
@@ -1287,6 +2035,7 @@ async def cb_adm_approve_all(call: CallbackQuery):
 
 
 async def _grant_referral_if_first_purchase(buyer_id: int):
+    """اولین خرید تاییدشده‌ی دعوت‌شده ⇒ یک تخفیف ۱۰٪ به دعوت‌کننده."""
     conn = db()
     c = conn.cursor()
     c.execute("SELECT invited_by FROM users WHERE user_id = ?", (buyer_id,))
@@ -1311,16 +2060,15 @@ async def cb_adm_approve_one(call: CallbackQuery):
     r = db_get_receipt(rid)
     if not r:
         await call.answer("یافت نشد", show_alert=True); return
-    _, uid, product, username, amount, _, status, *_ = r
+    _, uid, product, username, amount, _, status, _, _, _ = r
     if status == "approved":
         await call.answer("قبلاً تایید شده", show_alert=True); return
     db_approve_receipt(rid)
-    service, vol = parse_product(product)
     try:
         await bot.send_message(
             uid,
             f"✅ رسید #{rid} شما تایید شد!\n"
-            f"📦 سرویس: {product_label(service, vol)}\n"
+            f"📦 سرویس: {get_product_label(product)}\n"
             f"👤 یوزرنیم: <code>{username}</code>\n"
             f"💰 مبلغ: {fmt_price(amount)}\n\n"
             f"⏳ به‌زودی سرور برای شما ارسال می‌شود.",
@@ -1328,16 +2076,6 @@ async def cb_adm_approve_one(call: CallbackQuery):
         )
     except Exception:
         pass
-    inviter = await _grant_referral_if_first_purchase(uid)
-    if inviter:
-        try:
-            await bot.send_message(
-                inviter,
-                "🎉 یکی از دوستانی که دعوت کردی خرید کرد!\n"
-                "🎁 یک کد تخفیف ۱۰٪ یک‌بارمصرف برای یک محصول به حسابت اضافه شد.",
-            )
-        except Exception:
-            pass
     await call.answer("✅ تایید شد", show_alert=False)
     try:
         await call.message.edit_caption(
@@ -1359,16 +2097,15 @@ async def cb_adm_reject(call: CallbackQuery):
     r = db_get_receipt(rid)
     if not r:
         await call.answer("یافت نشد", show_alert=True); return
-    _, uid, product, username, amount, _, status, *_ = r
+    _, uid, product, username, amount, _, status, _, _, _ = r
     if status == "rejected":
         await call.answer("قبلاً رد شده", show_alert=True); return
     db_set_receipt_status(rid, "rejected")
-    service, vol = parse_product(product)
     try:
         await bot.send_message(
             uid,
             f"❌ رسید #{rid} شما توسط ادمین رد شد.\n"
-            f"📦 سرویس: {product_label(service, vol)}\n"
+            f"📦 سرویس: {get_product_label(product)}\n"
             f"💰 مبلغ: {fmt_price(amount)}\n\n"
             "در صورت سوال با پشتیبانی در تماس باشید.",
         )
@@ -1384,18 +2121,208 @@ async def cb_adm_reject(call: CallbackQuery):
             pass
 
 
+# ==================== کانفیگ‌های هدیه دعوت (مدیر) ====================
+def kb_adm_giftcfg() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="➕ افزودن کانفیگ‌های هدیه", callback_data="adm_giftcfg_add")],
+        [btn(BUTTON_LABELS["back"], "back", callback_data="admin_panel")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data == "adm_giftcfg")
+async def cb_adm_giftcfg(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await state.clear()
+    total = db_count_total_configs()
+    claimed = db_count_claimed_configs()
+    unclaimed = db_count_unclaimed_configs()
+    owed_users = db_list_owed_users()
+    total_owed = sum(o for _, o in owed_users)
+    txt = (
+        "🎁 مدیریت کانفیگ‌های هدیه دعوت\n\n"
+        "هر ۵ رفرال موفق ⇒ ۱ کانفیگ از این مخزن به دعوت‌کننده تعلق می‌گیرد.\n\n"
+        f"📦 کل ثبت‌شده: {fa_digits(total)}\n"
+        f"✅ گرفته‌شده: {fa_digits(claimed)}\n"
+        f"⏳ نگرفته‌شده (مانده): {fa_digits(unclaimed)}\n"
+        f"📌 بدهی به کاربران (در صف تحویل): {fa_digits(total_owed)}"
+    )
+    await call.message.edit_text(txt, reply_markup=kb_adm_giftcfg())
+
+
+@dp.callback_query(F.data == "adm_giftcfg_add")
+async def cb_adm_giftcfg_add(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await state.set_state(AdminStates.gift_count)
+    await call.message.edit_text(
+        "🎁 چند کانفیگ می‌خواهید اضافه کنید؟\n\n"
+        "یک عدد بفرستید (مثلاً <code>10</code>):",
+        reply_markup=kb_back("adm_giftcfg"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.gift_count)
+async def msg_adm_gift_count(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    txt = (message.text or "").strip()
+    try:
+        n = int(fa_to_en_digits(txt))
+        if n <= 0 or n > 1000:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ عدد نامعتبر است. یک عدد بین ۱ تا ۱۰۰۰ بفرستید.")
+        return
+    await state.update_data(gift_total=n, gift_index=1, gift_collected=[])
+    await state.set_state(AdminStates.gift_text)
+    await message.answer(
+        f"📥 کانفیگ شماره {fa_digits(1)} از {fa_digits(n)} را بفرستید:\n\n"
+        "(برای انصراف /cancel)"
+    )
+
+
+@dp.message(AdminStates.gift_text)
+async def msg_adm_gift_text(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if text == "/cancel":
+        await state.clear()
+        await message.answer("❌ لغو شد.", reply_markup=kb_adm_giftcfg())
+        return
+    if not text:
+        await message.answer("❌ متن خالی است. کانفیگ را بفرستید یا /cancel.")
+        return
+    data = await state.get_data()
+    total = int(data.get("gift_total", 0))
+    idx = int(data.get("gift_index", 1))
+    collected = list(data.get("gift_collected") or [])
+    collected.append(text)
+    if idx < total:
+        await state.update_data(gift_index=idx + 1, gift_collected=collected)
+        await message.answer(
+            f"✅ کانفیگ شماره {fa_digits(idx)} ذخیره شد.\n\n"
+            f"📥 کانفیگ شماره {fa_digits(idx + 1)} از {fa_digits(total)} را بفرستید:\n\n"
+            "(برای انصراف /cancel)"
+        )
+        return
+    # آخرین کانفیگ — همه را در دیتابیس ثبت کن
+    saved = 0
+    for c in collected:
+        try:
+            db_add_referral_config(c)
+            saved += 1
+        except Exception as e:
+            logger.warning(f"add referral config failed: {e}")
+    await state.clear()
+    # تلاش برای توزیع به بدهکاران
+    delivered = 0
+    try:
+        delivered = await _distribute_owed_configs()
+    except Exception as e:
+        logger.warning(f"distribute owed failed: {e}")
+    msg = (
+        f"✅ {fa_digits(saved)} کانفیگ هدیه ثبت شد.\n"
+    )
+    if delivered:
+        msg += f"📤 از این تعداد {fa_digits(delivered)} مورد به‌صورت خودکار به کاربران بدهکار تحویل داده شد.\n"
+    await message.answer(msg, reply_markup=kb_adm_giftcfg())
+
+
 # ==================== پیام همگانی ====================
 @dp.callback_query(F.data == "adm_broadcast")
 async def cb_adm_broadcast(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         await call.answer("❌", show_alert=True); return
     await call.answer()
-    await state.set_state(AdminStates.broadcast_message)
+    await state.clear()
+    pins_count = len(SETTINGS.get("broadcast_pins") or [])
     await call.message.edit_text(
         "📢 پیام همگانی\n\n"
-        "متن یا عکسی که می‌خواهید برای همه کاربران ربات ارسال شود را بفرستید 👇",
-        reply_markup=kb_back("admin_panel"),
+        "یکی از گزینه‌های زیر را انتخاب کنید 👇\n\n"
+        f"📌 پین‌های فعلی ذخیره‌شده: <b>{fa_digits(pins_count)}</b>",
+        reply_markup=kb_admin_broadcast(),
+        parse_mode=ParseMode.HTML,
     )
+
+
+@dp.callback_query(F.data == "adm_bc_nopin")
+async def cb_adm_bc_nopin(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await state.set_state(AdminStates.broadcast_message)
+    await call.message.edit_text(
+        "📨 پیام همگانی <b>بدون پین</b>\n\n"
+        "متن، عکس، ویدیو یا هر پیامی که می‌خواهید برای همه کاربران ارسال شود را بفرستید 👇",
+        reply_markup=kb_back("adm_broadcast"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data == "adm_bc_pin")
+async def cb_adm_bc_pin(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await state.set_state(AdminStates.broadcast_message_pin)
+    await call.message.edit_text(
+        "📌 پیام همگانی <b>با پین</b>\n\n"
+        "متن، عکس، ویدیو یا هر پیامی که می‌خواهید ارسال و در چت کاربران پین شود را بفرستید 👇",
+        reply_markup=kb_back("adm_broadcast"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _do_broadcast(message: Message, pin: bool):
+    """ارسال همگانی پیام؛ اگر pin=True تلاش می‌کند پیام را در هر چت پین کند."""
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE COALESCE(is_banned,0)=0")
+    users = [row[0] for row in c.fetchall()]
+    conn.close()
+
+    sent, failed, pinned = 0, 0, 0
+    new_pins = list(SETTINGS.get("broadcast_pins") or [])
+    status = await message.answer(f"⏳ در حال ارسال به {fa_digits(len(users))} کاربر...")
+    for uid in users:
+        try:
+            sent_msg = await message.copy_to(chat_id=uid)
+            sent += 1
+            if pin and bot is not None:
+                try:
+                    await bot.pin_chat_message(
+                        chat_id=uid,
+                        message_id=sent_msg.message_id,
+                        disable_notification=False,
+                    )
+                    new_pins.append({"chat_id": uid, "message_id": sent_msg.message_id})
+                    pinned += 1
+                except Exception as e:
+                    logger.warning(f"pin to {uid} failed: {e}")
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    if pin:
+        s_set("broadcast_pins", new_pins)
+
+    summary = (
+        f"✅ پیام همگانی ارسال شد.\n\n"
+        f"📤 موفق: {fa_digits(sent)}\n"
+        f"❌ ناموفق: {fa_digits(failed)}"
+    )
+    if pin:
+        summary += f"\n📌 پین‌شده: {fa_digits(pinned)}"
+    try:
+        await status.edit_text(summary, reply_markup=kb_admin())
+    except Exception:
+        await message.answer(summary, reply_markup=kb_admin())
 
 
 @dp.message(AdminStates.broadcast_message)
@@ -1403,36 +2330,60 @@ async def msg_adm_broadcast(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await state.clear()
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM users WHERE COALESCE(is_banned,0)=0")
-    users = [row[0] for row in c.fetchall()]
-    conn.close()
+    await _do_broadcast(message, pin=False)
 
-    sent, failed = 0, 0
-    status = await message.answer(f"⏳ در حال ارسال به {len(users)} کاربر...")
-    for uid in users:
+
+@dp.message(AdminStates.broadcast_message_pin)
+async def msg_adm_broadcast_pin(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await _do_broadcast(message, pin=True)
+
+
+@dp.callback_query(F.data == "adm_bc_unpin")
+async def cb_adm_bc_unpin(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    pins = list(SETTINGS.get("broadcast_pins") or [])
+    if not pins:
+        await call.message.edit_text(
+            "ℹ️ هیچ پین فعالی ذخیره نشده است.",
+            reply_markup=kb_admin_broadcast(),
+        )
+        return
+    status = await call.message.edit_text(
+        f"⏳ در حال حذف {fa_digits(len(pins))} پین قبلی...",
+    )
+    removed, failed = 0, 0
+    for item in pins:
         try:
-            await message.copy_to(chat_id=uid)
-            sent += 1
-        except Exception:
+            if bot is not None:
+                await bot.unpin_chat_message(
+                    chat_id=item["chat_id"],
+                    message_id=item["message_id"],
+                )
+            removed += 1
+        except Exception as e:
             failed += 1
-        await asyncio.sleep(0.05)
+            logger.warning(f"unpin failed for {item}: {e}")
+        await asyncio.sleep(0.03)
+    s_set("broadcast_pins", [])
     try:
         await status.edit_text(
-            f"✅ پیام همگانی ارسال شد.\n\n"
-            f"📤 موفق: {sent}\n"
-            f"❌ ناموفق: {failed}",
-            reply_markup=kb_admin(),
+            f"✅ حذف پین‌ها انجام شد.\n\n"
+            f"🗑 حذف‌شده: {fa_digits(removed)}\n"
+            f"❌ ناموفق: {fa_digits(failed)}",
+            reply_markup=kb_admin_broadcast(),
         )
     except Exception:
-        await message.answer(
-            f"✅ پیام همگانی ارسال شد.\n\n📤 موفق: {sent}\n❌ ناموفق: {failed}",
-            reply_markup=kb_admin(),
+        await call.message.answer(
+            f"✅ حذف پین‌ها انجام شد.\n🗑 حذف‌شده: {fa_digits(removed)}\n❌ ناموفق: {fa_digits(failed)}",
+            reply_markup=kb_admin_broadcast(),
         )
 
 
-# ==================== تحویل V2Ray ====================
 @dp.callback_query(F.data.startswith("adm_cfgsub_"))
 async def cb_adm_cfgsub(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
@@ -1466,26 +2417,25 @@ async def msg_adm_config(message: Message, state: FSMContext):
     mode = data.get("deliver_mode")
     if not rid:
         await state.clear(); return
-    db_set_receipt_field(rid, config=cfg)
+    db_set_receipt_config(rid, config=cfg)
     if mode == "cfgsub":
         await state.set_state(AdminStates.waiting_sub)
         await message.answer("✅ کانفیگ ثبت شد.\n\n🔗 حالا لطفاً ساب را ارسال کنید 👇")
         return
+    # فقط کانفیگ
     db_set_receipt_status(rid, "approved")
     r = db_get_receipt(rid)
     if r:
-        uid = r[1]; product = r[2]; username = r[3]
-        service, vol = parse_product(product)
+        uid = r[1]; username = r[3]; product = r[2]
         try:
             await bot.send_message(
                 uid,
                 f"📦 سرویس شما آماده شد!\n"
                 f"👤 یوزرنیم: <code>{username}</code>\n"
-                f"📦 سرویس: {product_label(service, vol)}\n\n"
+                f"💾 حجم: {product} گیگابایت\n\n"
                 f"📄 کانفیگ:\n<code>{cfg}</code>",
                 parse_mode=ParseMode.HTML,
             )
-            await _grant_referral_if_first_purchase(uid)
         except Exception as e:
             logger.warning(f"send config to {uid} failed: {e}")
     await state.clear()
@@ -1502,175 +2452,28 @@ async def msg_adm_sub(message: Message, state: FSMContext):
     rid = data.get("deliver_rid")
     if not rid:
         await state.clear(); return
-    db_set_receipt_field(rid, sub_link=sub)
+    db_set_receipt_config(rid, sub_link=sub)
     db_set_receipt_status(rid, "approved")
     r = db_get_receipt(rid)
     if r:
-        uid = r[1]; product = r[2]; username = r[3]; cfg = r[7]
-        service, vol = parse_product(product)
+        uid = r[1]; username = r[3]; product = r[2]; cfg = r[7]
         try:
             await bot.send_message(
                 uid,
                 f"📦 سرویس شما آماده شد!\n"
                 f"👤 یوزرنیم: <code>{username}</code>\n"
-                f"📦 سرویس: {product_label(service, vol)}\n\n"
+                f"💾 حجم: {product} گیگابایت\n\n"
                 f"📄 کانفیگ:\n<code>{cfg}</code>\n\n"
                 f"🔗 ساب:\n<code>{sub}</code>",
                 parse_mode=ParseMode.HTML,
             )
-            await _grant_referral_if_first_purchase(uid)
         except Exception as e:
             logger.warning(f"send config+sub to {uid} failed: {e}")
     await state.clear()
     await message.answer(f"✅ کانفیگ + ساب برای کاربر ارسال شد. (رسید #{rid})")
 
 
-# ==================== تحویل OpenVPN ====================
-def _ovpn_tutorial_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📚 آموزش", callback_data="tut_openvpn")]
-    ])
-
-
-async def _send_ovpn_completion(uid: int, rid: int, intro: str):
-    try:
-        await bot.send_message(
-            uid,
-            intro + "\n\nاگر بلد نیستی آموزش ببین 👇",
-            reply_markup=_ovpn_tutorial_kb(),
-        )
-    except Exception as e:
-        logger.warning(f"send ovpn completion failed: {e}")
-
-
-@dp.callback_query(F.data.startswith("adm_ovpnfile_"))
-async def cb_adm_ovpn_file(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        await call.answer("❌", show_alert=True); return
-    await call.answer()
-    rid = int(call.data.split("_")[2])
-    await state.update_data(deliver_rid=rid)
-    await state.set_state(AdminStates.ovpn_waiting_file)
-    await call.message.answer(f"📁 برای رسید #{rid}\n\nلطفاً فایل را بفرستید 👇")
-
-
-@dp.message(AdminStates.ovpn_waiting_file)
-async def msg_ovpn_file(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if not message.document:
-        await message.answer("❌ لطفاً فایل (Document) ارسال کنید."); return
-    data = await state.get_data()
-    rid = data.get("deliver_rid")
-    if not rid:
-        await state.clear(); return
-    db_set_receipt_field(rid, ovpn_file_id=message.document.file_id)
-    await state.set_state(AdminStates.ovpn_waiting_user)
-    await message.answer("✅ فایل ثبت شد.\n\n👤 لطفاً یوزر بفرستید 👇")
-
-
-@dp.message(AdminStates.ovpn_waiting_user)
-async def msg_ovpn_user(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    user = (message.text or "").strip()
-    if not user:
-        await message.answer("❌ یوزر خالی است."); return
-    data = await state.get_data()
-    rid = data.get("deliver_rid")
-    if not rid:
-        await state.clear(); return
-    db_set_receipt_field(rid, ovpn_user=user)
-    await state.set_state(AdminStates.ovpn_waiting_pass)
-    await message.answer("✅ یوزر ثبت شد.\n\n🔒 لطفاً پسورد بفرستید 👇")
-
-
-@dp.message(AdminStates.ovpn_waiting_pass)
-async def msg_ovpn_pass(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    pwd = (message.text or "").strip()
-    if not pwd:
-        await message.answer("❌ پسورد خالی است."); return
-    data = await state.get_data()
-    rid = data.get("deliver_rid")
-    if not rid:
-        await state.clear(); return
-    db_set_receipt_field(rid, ovpn_pass=pwd)
-    db_set_receipt_status(rid, "approved")
-    r = db_get_receipt(rid)
-    if r:
-        uid = r[1]; product = r[2]; username = r[3]
-        fid = r[9]; user = r[10]
-        service, vol = parse_product(product)
-        try:
-            await bot.send_document(
-                uid, fid,
-                caption=(
-                    f"📦 سرویس شما آماده شد!\n"
-                    f"👤 یوزرنیم: {username}\n"
-                    f"📦 {product_label(service, vol)}\n"
-                    f"📋 {SERVICES[service]['spec']}"
-                ),
-            )
-            await bot.send_message(
-                uid,
-                f"🔑 اطلاعات اتصال:\n\n"
-                f"👤 یوزر: <code>{user}</code>\n"
-                f"🔒 پسورد: <code>{pwd}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            await _send_ovpn_completion(uid, rid, "🎉 سرویس شما تحویل داده شد.")
-            await _grant_referral_if_first_purchase(uid)
-        except Exception as e:
-            logger.warning(f"deliver ovpn file failed: {e}")
-    await state.clear()
-    await message.answer(f"✅ سرویس OpenVPN (فایل + یوزر/پسورد) برای کاربر ارسال شد. (رسید #{rid})")
-
-
-@dp.callback_query(F.data.startswith("adm_ovpnlink_"))
-async def cb_adm_ovpn_link(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        await call.answer("❌", show_alert=True); return
-    await call.answer()
-    rid = int(call.data.split("_")[2])
-    await state.update_data(deliver_rid=rid)
-    await state.set_state(AdminStates.ovpn_waiting_link)
-    await call.message.answer(f"🔗 برای رسید #{rid}\n\nلطفاً لینک بفرستید 👇")
-
-
-@dp.message(AdminStates.ovpn_waiting_link)
-async def msg_ovpn_link(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    lnk = (message.text or "").strip()
-    if not lnk:
-        await message.answer("❌ لینک خالی است."); return
-    data = await state.get_data()
-    rid = data.get("deliver_rid")
-    if not rid:
-        await state.clear(); return
-    db_set_receipt_field(rid, ovpn_link=lnk)
-    db_set_receipt_status(rid, "approved")
-    r = db_get_receipt(rid)
-    if r:
-        uid = r[1]; product = r[2]; username = r[3]
-        service, vol = parse_product(product)
-        try:
-            await bot.send_message(
-                uid,
-                f"📦 سرویس شما آماده شد!\n"
-                f"👤 یوزرنیم: <code>{username}</code>\n"
-                f"📦 {product_label(service, vol)}\n"
-                f"📋 {SERVICES[service]['spec']}\n\n"
-                f"🔗 لینک:\n<code>{lnk}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            await _send_ovpn_completion(uid, rid, "🎉 سرویس شما تحویل داده شد.")
-            await _grant_referral_if_first_purchase(uid)
-        except Exception as e:
-            logger.warning(f"deliver ovpn link failed: {e}")
-    await state.clear()
-    await message.answer(f"✅ لینک OpenVPN برای کاربر ارسال شد. (رسید #{rid})")
-
-
-# ==================== بن/آنبن ====================
+# بن
 @dp.callback_query(F.data == "adm_ban")
 async def cb_adm_ban(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
@@ -1713,7 +2516,7 @@ async def msg_adm_unban(message: Message, state: FSMContext):
     await message.answer(f"✅ کاربر <code>{uid}</code> آنبن شد.", reply_markup=kb_admin(), parse_mode=ParseMode.HTML)
 
 
-# ==================== کد تخفیف ====================
+# کد تخفیف
 @dp.callback_query(F.data == "adm_discount")
 async def cb_adm_discount(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
@@ -1723,7 +2526,8 @@ async def cb_adm_discount(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(
         "🎁 لطفاً کد تخفیف را به این صورت ارسال کنید:\n\n"
         "<b>Badboy50</b>\n\n"
-        "یعنی کلمه + درصد در انتها (۱ تا ۱۰۰).",
+        "یعنی کلمه + درصد در انتها (۱ تا ۱۰۰).\n"
+        "این کد روی همه محصولات اعمال خواهد شد.",
         reply_markup=kb_back("admin_panel"),
         parse_mode=ParseMode.HTML,
     )
@@ -1748,26 +2552,15 @@ async def msg_adm_discount(message: Message, state: FSMContext):
     )
 
 
-# ==================== تنظیم قیمت ====================
-@dp.callback_query(F.data == "adm_prices_v2ray")
-async def cb_adm_prices_v2ray(call: CallbackQuery):
+# تنظیم قیمت
+@dp.callback_query(F.data == "adm_prices")
+async def cb_adm_prices(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         await call.answer("❌", show_alert=True); return
     await call.answer()
     await call.message.edit_text(
-        "💵 تنظیم قیمت V2Ray\n\nروی محصول مورد نظر بزنید:",
-        reply_markup=kb_admin_prices("v2ray"),
-    )
-
-
-@dp.callback_query(F.data == "adm_prices_openvpn")
-async def cb_adm_prices_openvpn(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        await call.answer("❌", show_alert=True); return
-    await call.answer()
-    await call.message.edit_text(
-        "💵 تنظیم قیمت Open VPN\n\nروی محصول مورد نظر بزنید:",
-        reply_markup=kb_admin_prices("openvpn"),
+        "💵 برای تنظیم قیمت، روی محصول مورد نظر بزنید:",
+        reply_markup=kb_admin_prices(),
     )
 
 
@@ -1776,18 +2569,16 @@ async def cb_set_price(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         await call.answer("❌", show_alert=True); return
     await call.answer()
-    parts = call.data.split("_", 2)
-    if len(parts) < 3: return
-    service, vol = parts[1], parts[2]
-    if service not in SERVICES or vol not in SERVICES[service]["volumes"]:
+    p = call.data.split("_", 1)[1]
+    if not get_product(p):
         return
-    await state.update_data(target_service=service, target_vol=vol)
+    await state.update_data(target_product=p)
     await state.set_state(AdminStates.set_price)
-    cur = get_price(service, vol)
+    cur = get_product_price(p)
     await call.message.edit_text(
-        f"💵 قیمت فعلی {product_label(service, vol)}: {fmt_price(cur)}\n\n"
+        f"💵 قیمت فعلی {get_product_label(p)}: {fmt_price(cur)}\n\n"
         "قیمت جدید را به تومان (فقط عدد) ارسال کنید 👇",
-        reply_markup=kb_back(f"adm_prices_{service}"),
+        reply_markup=kb_back("adm_prices"),
     )
 
 
@@ -1799,19 +2590,129 @@ async def msg_set_price(message: Message, state: FSMContext):
         await message.answer("❌ فقط عدد ارسال کنید."); return
     new_price = int(txt)
     data = await state.get_data()
-    service = data.get("target_service")
-    vol = data.get("target_vol")
-    if not (service and vol):
+    p = data.get("target_product")
+    if not p:
         await state.clear(); return
-    set_price(service, vol, new_price)
+    update_product_price(p, new_price)
     await state.clear()
     await message.answer(
-        f"✅ قیمت {product_label(service, vol)} به {fmt_price(new_price)} تنظیم شد.",
-        reply_markup=kb_admin_prices(service),
+        f"✅ قیمت {get_product_label(p)} به {fmt_price(new_price)} تنظیم شد.",
+        reply_markup=kb_admin_prices(),
     )
 
 
-# ==================== تنظیم شماره کارت ====================
+# ===== افزودن / حذف محصول =====
+@dp.callback_query(F.data == "addprod")
+async def cb_add_product(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await state.set_state(AdminStates.add_product_label)
+    await call.message.edit_text(
+        "➕ افزودن محصول جدید\n\n"
+        "🟢 لطفاً <b>حجم</b> محصول را به‌صورت متن ارسال کنید.\n"
+        "مثال: <code>4 گیگ</code> یا <code>۲۰ گیگابایت</code>",
+        reply_markup=kb_back("adm_prices"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.add_product_label)
+async def msg_add_product_label(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    label = (message.text or "").strip()
+    if not label or len(label) > 40:
+        await message.answer("❌ متن نامعتبر است (۱ تا ۴۰ کاراکتر).")
+        return
+    await state.update_data(new_product_label=label)
+    await state.set_state(AdminStates.add_product_price)
+    await message.answer(
+        f"✅ حجم ثبت شد: <b>{label}</b>\n\n"
+        "💰 حالا <b>قیمت</b> را به تومان (فقط عدد) ارسال کنید 👇",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.add_product_price)
+async def msg_add_product_price(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    txt = re.sub(r"[^\d]", "", message.text or "")
+    if not txt:
+        await message.answer("❌ فقط عدد ارسال کنید.")
+        return
+    price = int(txt)
+    data = await state.get_data()
+    label = data.get("new_product_label")
+    if not label:
+        await state.clear()
+        return
+    key = add_product(label, price)
+    await state.clear()
+    await message.answer(
+        f"✅ محصول جدید اضافه شد:\n\n"
+        f"📦 حجم: <b>{label}</b>\n"
+        f"💰 قیمت: <b>{fmt_price(price)}</b>",
+        reply_markup=kb_admin_prices(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("delprod_"))
+async def cb_del_product(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    key = call.data.split("_", 1)[1]
+    p = get_product(key)
+    if not p:
+        await call.answer("یافت نشد", show_alert=True); return
+    label = p["label"]
+    if remove_product(key):
+        await call.answer(f"🗑 «{label}» حذف شد", show_alert=False)
+    else:
+        await call.answer("❌ حذف نشد", show_alert=True)
+    try:
+        await call.message.edit_reply_markup(reply_markup=kb_admin_prices())
+    except Exception:
+        pass
+
+
+# ===== خاموش/روشن کردن فروش =====
+@dp.callback_query(F.data == "adm_toggle_sales")
+async def cb_toggle_sales(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    new_val = not SETTINGS.get("sales_enabled", True)
+    s_set("sales_enabled", new_val)
+    await call.answer(
+        "🟢 فروش روشن شد" if new_val else "🔴 فروش خاموش شد",
+        show_alert=False,
+    )
+    try:
+        await call.message.edit_reply_markup(reply_markup=kb_admin())
+    except Exception:
+        pass
+
+
+# ===== خاموش/روشن کردن ربات =====
+@dp.callback_query(F.data == "adm_toggle_bot")
+async def cb_toggle_bot(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    new_val = not SETTINGS.get("bot_enabled", True)
+    s_set("bot_enabled", new_val)
+    await call.answer(
+        "🟢 ربات روشن شد" if new_val else "🔴 ربات خاموش شد (کاربران پیام بروزرسانی می‌بینند)",
+        show_alert=False,
+    )
+    try:
+        await call.message.edit_reply_markup(reply_markup=kb_admin())
+    except Exception:
+        pass
+
+
+# تنظیم شماره کارت
 @dp.callback_query(F.data == "adm_card")
 async def cb_adm_card(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
@@ -1836,7 +2737,7 @@ async def msg_card_number(message: Message, state: FSMContext):
         await message.answer("❌ شماره کارت نامعتبر است."); return
     await state.update_data(card_number=card)
     await state.set_state(AdminStates.set_card_holder)
-    await message.answer("✅ شماره کارت ثبت شد.\n\n👤 حالا نام صاحب کارت را ارسال کنید 👇")
+    await message.answer("✅ شماره کارت ثبت شد.\n\n👤 حالا نام کاربری/نام صاحب کارت را ارسال کنید 👇")
 
 
 @dp.message(AdminStates.set_card_holder)
@@ -1857,7 +2758,7 @@ async def msg_card_holder(message: Message, state: FSMContext):
     )
 
 
-# ==================== تنظیم پشتیبانی ====================
+# تنظیم پشتیبانی
 @dp.callback_query(F.data == "adm_support")
 async def cb_adm_support(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
@@ -1866,7 +2767,7 @@ async def cb_adm_support(call: CallbackQuery, state: FSMContext):
     cur = SETTINGS.get("support_id") or DEFAULT_SUPPORT_ID
     await state.set_state(AdminStates.set_support)
     await call.message.edit_text(
-        f"🛟 آیدی پشتیبانی فعلی: {cur}\n\nآیدی جدید را ارسال کنید (مثلاً @Px7Vpn) 👇",
+        f"🛟 آیدی پشتیبانی فعلی: {cur}\n\nآیدی جدید را ارسال کنید (مثلاً @VM_GOZARNET) 👇",
         reply_markup=kb_back("admin_panel"),
     )
 
@@ -1884,7 +2785,7 @@ async def msg_set_support(message: Message, state: FSMContext):
     await message.answer(f"✅ آیدی پشتیبانی به {sid} تغییر کرد.", reply_markup=kb_admin())
 
 
-# ==================== چنل‌ها ====================
+# تنظیم چنل‌ها
 @dp.callback_query(F.data == "adm_channels")
 async def cb_adm_channels(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
@@ -1916,7 +2817,7 @@ async def cb_addch(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.set_state(AdminStates.add_channel)
     await call.message.edit_text(
-        "📡 یوزرنیم چنل را ارسال کنید (مثلاً @Px7Vpn یا لینک کامل):",
+        "📡 یوزرنیم چنل را ارسال کنید (مثلاً @vm_vpn یا لینک کامل):",
         reply_markup=kb_back("adm_channels"),
     )
 
@@ -1937,78 +2838,860 @@ async def msg_addch(message: Message, state: FSMContext):
     await message.answer(f"✅ {ch} اضافه شد.", reply_markup=kb_admin_channels())
 
 
-# ==================== آپلود آموزش ====================
-def _kb_tutorial_admin(service: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 پاک کردن همه آموزش‌ها", callback_data=f"adm_cleartut_{service}")],
-        [InlineKeyboardButton(text="✅ تمام", callback_data="admin_panel")],
-    ])
-
-
-@dp.callback_query(F.data.startswith("adm_uptut_"))
-async def cb_adm_uptut(call: CallbackQuery, state: FSMContext):
+# رنگ دکمه‌ها
+@dp.callback_query(F.data == "adm_colors")
+async def cb_adm_colors(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("❌", show_alert=True); return
     await call.answer()
-    service = call.data.split("_", 2)[2]
-    if service not in SERVICES: return
-    await state.update_data(tut_service=service)
-    await state.set_state(AdminStates.upload_tutorial)
-    items = SETTINGS.get("tutorials", {}).get(service, [])
     await call.message.edit_text(
-        f"📚 آپلود آموزش {SERVICES[service]['label']}\n\n"
-        f"تعداد فعلی آیتم‌ها: {fa_digits(len(items))}\n\n"
-        "هر چی می‌خوای (عکس / ویدیو / فایل / متن) رو بفرست تا اضافه بشه.\n"
-        "وقتی تموم شد روی «تمام» بزن.",
-        reply_markup=_kb_tutorial_admin(service),
+        "🎨 یکی از دکمه‌ها را برای تغییر رنگ انتخاب کنید:",
+        reply_markup=kb_admin_colors(),
     )
 
 
-@dp.callback_query(F.data.startswith("adm_cleartut_"))
-async def cb_adm_cleartut(call: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data.startswith("color_"))
+async def cb_color_pick(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("❌", show_alert=True); return
-    service = call.data.split("_", 2)[2]
-    if service not in SERVICES: return
-    SETTINGS.setdefault("tutorials", {})[service] = []
-    save_settings(SETTINGS)
-    await call.answer("✅ پاک شد")
+    await call.answer()
+    key = call.data.split("_", 1)[1]
+    label = BUTTON_LABELS.get(key, key)
     await call.message.edit_text(
-        f"📚 آپلود آموزش {SERVICES[service]['label']}\n\n"
-        f"تعداد فعلی آیتم‌ها: ۰\n\n"
-        "هر چی می‌خوای (عکس / ویدیو / فایل / متن) رو بفرست تا اضافه بشه.\n"
-        "وقتی تموم شد روی «تمام» بزن.",
-        reply_markup=_kb_tutorial_admin(service),
+        f"🎨 رنگ دلخواه برای دکمه «{label}» را انتخاب کنید:",
+        reply_markup=kb_color_choice(key),
     )
 
 
-@dp.message(AdminStates.upload_tutorial)
-async def msg_upload_tutorial(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    data = await state.get_data()
-    service = data.get("tut_service")
-    if service not in SERVICES:
-        await state.clear(); return
-    item = None
-    if message.photo:
-        item = {"type": "photo", "file_id": message.photo[-1].file_id, "text": message.caption or ""}
-    elif message.video:
-        item = {"type": "video", "file_id": message.video.file_id, "text": message.caption or ""}
-    elif message.document:
-        item = {"type": "document", "file_id": message.document.file_id, "text": message.caption or ""}
-    elif message.text:
-        item = {"type": "text", "file_id": "", "text": message.text}
-    if not item:
-        await message.answer("❌ نوع پیام پشتیبانی نمی‌شود.")
-        return
-    SETTINGS.setdefault("tutorials", {}).setdefault(service, []).append(item)
+@dp.callback_query(F.data.startswith("setcolor_"))
+async def cb_set_color(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    parts = call.data.split("_")
+    # setcolor_<key>_<color>
+    color = parts[-1]
+    key = "_".join(parts[1:-1])
+    if color not in ("primary", "success", "danger", "default"):
+        await call.answer("نامعتبر", show_alert=True); return
+    SETTINGS["colors"][key] = color
     save_settings(SETTINGS)
-    items = SETTINGS["tutorials"][service]
-    await message.answer(
-        f"✅ اضافه شد. تعداد فعلی: {fa_digits(len(items))}\n\n"
-        "می‌تونی آیتم بعدی رو بفرستی یا «تمام» رو بزنی.",
-        reply_markup=_kb_tutorial_admin(service),
+    await call.answer("✅ ذخیره شد")
+    await call.message.edit_text(
+        "🎨 یکی از دکمه‌ها را برای تغییر رنگ انتخاب کنید:",
+        reply_markup=kb_admin_colors(),
     )
+
+
+# ==================== لیست کاربران (پنل ادمین) ====================
+USERS_PER_PAGE = 8
+
+
+def kb_users_page(page: int, banned_only: bool = False) -> InlineKeyboardMarkup:
+    rows, total = db_get_users_page(page, USERS_PER_PAGE, banned_only=banned_only)
+    rows_kb = []
+    for r in rows:
+        # ساختار جدید: (uid, uname, fname, balance, banned, join_date, coins, refs)
+        uid, uname, fname, bal, banned, _join, coins, refs = r
+        name = fname or uname or str(uid)
+        if len(name) > 18:
+            name = name[:18] + "…"
+        flag = "⛔️ " if banned else ""
+        # نمایش تعداد رفرال و سکه روی همان دکمه
+        label = f"{flag}{name} | 🪙{fa_digits(coins)} 👥{fa_digits(refs)}"
+        rows_kb.append([InlineKeyboardButton(text=label, callback_data=f"adm_user_{uid}")])
+
+    nav = []
+    prefix = "adm_banlist_" if banned_only else "adm_users_"
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"{prefix}{page-1}"))
+    nav.append(InlineKeyboardButton(text=f"صفحه {page+1}/{max(1,(total+USERS_PER_PAGE-1)//USERS_PER_PAGE)}", callback_data="noop"))
+    if (page + 1) * USERS_PER_PAGE < total:
+        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"{prefix}{page+1}"))
+    if nav:
+        rows_kb.append(nav)
+    rows_kb.append([InlineKeyboardButton(text=BUTTON_LABELS["back"], callback_data="adm_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows_kb)
+
+
+def kb_user_detail(uid: int, banned: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="🔓 آنبن کردن" if banned else "🚫 بن کردن",
+                callback_data=f"adm_userban_{uid}",
+            )
+        ],
+        [InlineKeyboardButton(text="✉️ پیام به کاربر", callback_data=f"adm_msg_{uid}")],
+        [
+            InlineKeyboardButton(text="➕ افزودن اعتبار", callback_data=f"adm_addbal_{uid}"),
+            InlineKeyboardButton(text="➖ کسر اعتبار", callback_data=f"adm_subbal_{uid}"),
+        ],
+        [
+            InlineKeyboardButton(text="🪙➕ افزودن سکه", callback_data=f"adm_addcoins_{uid}"),
+            InlineKeyboardButton(text="🪙➖ کسر سکه", callback_data=f"adm_subcoins_{uid}"),
+        ],
+        [InlineKeyboardButton(text=BUTTON_LABELS["back"], callback_data="adm_users_0")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def user_detail_text(info: dict) -> str:
+    name = info.get("full_name") or info.get("username") or "—"
+    uname = f"@{info['username']}" if info.get("username") else "—"
+    refs_count = db_count_credited_referrals(info["user_id"])
+    return (
+        "👤 <b>اطلاعات کاربر</b>\n\n"
+        f"🆔 شناسه: <code>{info['user_id']}</code>\n"
+        f"👤 نام: {name}\n"
+        f"📛 یوزرنیم: {uname}\n"
+        f"💰 موجودی: <b>{info['balance']:,}</b> تومان\n"
+        f"🪙 سکه‌ها: <b>{fa_digits(info.get('coins', 0))}</b>\n"
+        f"👥 تعداد رفرال‌های موفق: <b>{fa_digits(refs_count)}</b>\n"
+        f"📅 تاریخ عضویت: {info.get('join_date') or '—'}\n"
+        f"⛔️ وضعیت بن: {'بله' if info['is_banned'] else 'خیر'}\n"
+        f"🤝 دعوت‌شده توسط: {info.get('invited_by') or '—'}\n"
+        f"🎁 کانفیگ‌های هدیه دریافتی: {info['ref_configs_received']}\n"
+        f"⏳ کانفیگ‌های هدیه طلب: {info['ref_configs_owed']}"
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_users_"))
+async def cb_adm_users(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "users"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    page = int(call.data.split("_")[-1])
+    rows, total = db_get_users_page(page, USERS_PER_PAGE)
+    if total == 0:
+        await call.message.edit_text("⛔️ کاربری ثبت نشده است.", reply_markup=kb_back("adm_back"))
+        return
+    await call.message.edit_text(
+        f"👥 <b>لیست کاربران</b> (مجموع: {total})\n\nروی هر کاربر برای جزئیات بزنید:",
+        reply_markup=kb_users_page(page, banned_only=False),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_banlist_"))
+async def cb_adm_banlist(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "ban"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    page = int(call.data.split("_")[-1])
+    rows, total = db_get_users_page(page, USERS_PER_PAGE, banned_only=True)
+    if total == 0:
+        await call.message.edit_text("✅ هیچ کاربر بن‌شده‌ای وجود ندارد.", reply_markup=kb_back("adm_back"))
+        return
+    await call.message.edit_text(
+        f"📋 <b>کاربران بن‌شده</b> (مجموع: {total})\n\nروی هر کاربر بزنید:",
+        reply_markup=kb_users_page(page, banned_only=True),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_user_"))
+async def cb_adm_user(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    uid = int(call.data.split("_")[-1])
+    info = db_get_user_full(uid)
+    if not info:
+        await call.message.edit_text("❌ کاربر یافت نشد.", reply_markup=kb_back("adm_back"))
+        return
+    await call.message.edit_text(
+        user_detail_text(info),
+        reply_markup=kb_user_detail(uid, info["is_banned"]),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_userban_"))
+async def cb_adm_userban(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "ban"):
+        await call.answer("❌", show_alert=True); return
+    uid = int(call.data.split("_")[-1])
+    cur = db_is_banned(uid)
+    db_set_ban(uid, 0 if cur else 1)
+    await call.answer("✅ وضعیت تغییر کرد.")
+    info = db_get_user_full(uid)
+    if info:
+        await call.message.edit_text(
+            user_detail_text(info),
+            reply_markup=kb_user_detail(uid, info["is_banned"]),
+            parse_mode=ParseMode.HTML,
+        )
+
+
+@dp.callback_query(F.data.startswith("adm_msg_"))
+async def cb_adm_msg(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "users"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    uid = int(call.data.split("_")[-1])
+    await state.update_data(target_uid=uid)
+    await state.set_state(AdminStates.msg_user_text)
+    await call.message.edit_text(
+        f"✉️ متن پیام برای کاربر <code>{uid}</code> را ارسال کنید:",
+        reply_markup=kb_back(f"adm_user_{uid}"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.msg_user_text)
+async def msg_user_send(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    uid = data.get("target_uid")
+    text = message.text or ""
+    try:
+        await bot.send_message(uid, f"📩 پیام از مدیر:\n\n{text}")
+        await message.answer("✅ پیام ارسال شد.", reply_markup=kb_admin(message.from_user.id))
+    except Exception as e:
+        await message.answer(f"❌ ارسال نشد: {e}", reply_markup=kb_admin(message.from_user.id))
+    await state.clear()
+
+
+@dp.callback_query(F.data.startswith("adm_addbal_"))
+async def cb_adm_addbal(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "users"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    uid = int(call.data.split("_")[-1])
+    await state.update_data(target_uid=uid)
+    await state.set_state(AdminStates.addbal_amount)
+    await call.message.edit_text(
+        f"➕ مبلغ افزودن به موجودی کاربر <code>{uid}</code> را به تومان ارسال کنید:",
+        reply_markup=kb_back(f"adm_user_{uid}"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.addbal_amount)
+async def addbal_amount_handler(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        amt = int((message.text or "0").strip().replace(",", ""))
+        if amt <= 0:
+            raise ValueError()
+    except Exception:
+        await message.answer("❌ عدد معتبر بفرستید.")
+        return
+    data = await state.get_data()
+    uid = data.get("target_uid")
+    db_add_balance(uid, amt)
+    await state.clear()
+    await message.answer(f"✅ مبلغ {amt:,} تومان به موجودی کاربر <code>{uid}</code> افزوده شد.",
+                         reply_markup=kb_admin(message.from_user.id), parse_mode=ParseMode.HTML)
+    try:
+        await bot.send_message(uid, f"💰 مدیر مبلغ {amt:,} تومان به موجودی شما افزود.")
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data.startswith("adm_subbal_"))
+async def cb_adm_subbal(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "users"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    uid = int(call.data.split("_")[-1])
+    await state.update_data(target_uid=uid)
+    await state.set_state(AdminStates.subbal_amount)
+    await call.message.edit_text(
+        f"➖ مبلغ کسر از موجودی کاربر <code>{uid}</code> را به تومان ارسال کنید:",
+        reply_markup=kb_back(f"adm_user_{uid}"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.subbal_amount)
+async def subbal_amount_handler(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        amt = int((message.text or "0").strip().replace(",", ""))
+        if amt <= 0:
+            raise ValueError()
+    except Exception:
+        await message.answer("❌ عدد معتبر بفرستید.")
+        return
+    data = await state.get_data()
+    uid = data.get("target_uid")
+    db_add_balance(uid, -amt)
+    await state.clear()
+    await message.answer(f"✅ مبلغ {amt:,} تومان از موجودی کاربر <code>{uid}</code> کسر شد.",
+                         reply_markup=kb_admin(message.from_user.id), parse_mode=ParseMode.HTML)
+    try:
+        await bot.send_message(uid, f"💰 مدیر مبلغ {amt:,} تومان از موجودی شما کسر کرد.")
+    except Exception:
+        pass
+
+
+# ==================== 🪙 افزودن/کسر سکه (روی کاربر مشخص) ====================
+@dp.callback_query(F.data.startswith("adm_addcoins_"))
+async def cb_adm_addcoins(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "coins"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    uid = int(call.data.split("_")[-1])
+    await state.update_data(target_uid=uid)
+    await state.set_state(AdminStates.addcoins_amount)
+    await call.message.edit_text(
+        f"🪙➕ تعداد سکه برای افزودن به کاربر <code>{uid}</code> را ارسال کنید:",
+        reply_markup=kb_back(f"adm_user_{uid}"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.addcoins_amount)
+async def addcoins_amount_handler(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        amt = int(fa_to_en_digits((message.text or "0").strip().replace(",", "")))
+        if amt <= 0:
+            raise ValueError()
+    except Exception:
+        await message.answer("❌ عدد معتبر بفرستید.")
+        return
+    data = await state.get_data()
+    uid = data.get("target_uid")
+    new_balance = db_add_coins(uid, amt)
+    await state.clear()
+    await message.answer(
+        f"✅ {fa_digits(amt)} سکه به کاربر <code>{uid}</code> افزوده شد.\n"
+        f"🪙 موجودی جدید: <b>{fa_digits(new_balance)}</b>",
+        reply_markup=kb_admin(message.from_user.id),
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        await bot.send_message(uid, f"🪙 مدیر {fa_digits(amt)} سکه به حساب شما افزود. (موجودی: {fa_digits(new_balance)})")
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data.startswith("adm_subcoins_"))
+async def cb_adm_subcoins(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "coins"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    uid = int(call.data.split("_")[-1])
+    await state.update_data(target_uid=uid)
+    await state.set_state(AdminStates.subcoins_amount)
+    await call.message.edit_text(
+        f"🪙➖ تعداد سکه برای کسر از کاربر <code>{uid}</code> را ارسال کنید:",
+        reply_markup=kb_back(f"adm_user_{uid}"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.subcoins_amount)
+async def subcoins_amount_handler(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        amt = int(fa_to_en_digits((message.text or "0").strip().replace(",", "")))
+        if amt <= 0:
+            raise ValueError()
+    except Exception:
+        await message.answer("❌ عدد معتبر بفرستید.")
+        return
+    data = await state.get_data()
+    uid = data.get("target_uid")
+    new_balance = db_add_coins(uid, -amt)
+    await state.clear()
+    await message.answer(
+        f"✅ {fa_digits(amt)} سکه از کاربر <code>{uid}</code> کسر شد.\n"
+        f"🪙 موجودی جدید: <b>{fa_digits(new_balance)}</b>",
+        reply_markup=kb_admin(message.from_user.id),
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        await bot.send_message(uid, f"🪙 مدیر {fa_digits(amt)} سکه از حساب شما کسر کرد. (موجودی: {fa_digits(new_balance)})")
+    except Exception:
+        pass
+
+
+# ==================== 🪙 منوی مدیریت سکه‌ها ====================
+def kb_adm_coins() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="⚙️ تنظیم سکه کانفیگ رایگان", callback_data="adm_setfreecoins")],
+        [InlineKeyboardButton(text="🔁 انتقال سکه بین کاربران", callback_data="adm_transcoins")],
+        [InlineKeyboardButton(text="🧹 حذف همگانی سکه‌ها", callback_data="adm_clearcoins")],
+        [InlineKeyboardButton(text=BUTTON_LABELS["back"], callback_data="adm_back")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data == "adm_coins")
+async def cb_adm_coins_menu(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "coins"):
+        await call.answer("❌", show_alert=True); return
+    await state.clear()
+    await call.answer()
+    free_cost = int(SETTINGS.get("free_config_coins", 5) or 5)
+    coins_per_ref = int(SETTINGS.get("coins_per_referral", 1) or 1)
+    txt = (
+        "🪙 <b>مدیریت سکه‌ها</b>\n\n"
+        f"⚙️ سکه لازم برای کانفیگ رایگان: <b>{fa_digits(free_cost)}</b>\n"
+        f"🤝 سکه به ازای هر دعوت موفق: <b>{fa_digits(coins_per_ref)}</b>\n\n"
+        "گزینه‌ای را انتخاب کنید 👇"
+    )
+    await call.message.edit_text(txt, reply_markup=kb_adm_coins(), parse_mode=ParseMode.HTML)
+
+
+# --- تنظیم سکه کانفیگ رایگان ---
+@dp.callback_query(F.data == "adm_setfreecoins")
+async def cb_adm_setfreecoins(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "coins"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    cur = int(SETTINGS.get("free_config_coins", 5) or 5)
+    await state.set_state(AdminStates.set_freeconf_coins)
+    await call.message.edit_text(
+        "⚙️ <b>تنظیم سکه کانفیگ رایگان</b>\n\n"
+        f"مقدار فعلی: <b>{fa_digits(cur)}</b> سکه\n\n"
+        "تعداد سکه جدید را ارسال کنید (یک عدد بین ۱ تا ۱۰۰۰):",
+        reply_markup=kb_back("adm_coins"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.set_freeconf_coins)
+async def msg_set_freeconf_coins(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        n = int(fa_to_en_digits((message.text or "").strip()))
+        if n < 1 or n > 1000:
+            raise ValueError()
+    except Exception:
+        await message.answer("❌ عدد نامعتبر است (۱ تا ۱۰۰۰).")
+        return
+    s_set("free_config_coins", n)
+    await state.clear()
+    await message.answer(
+        f"✅ سکه لازم برای کانفیگ رایگان روی <b>{fa_digits(n)}</b> تنظیم شد.",
+        reply_markup=kb_adm_coins(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# --- حذف همگانی سکه‌ها ---
+@dp.callback_query(F.data == "adm_clearcoins")
+async def cb_adm_clearcoins(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "coins"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    rows = [
+        [
+            InlineKeyboardButton(text="✅ بله، صفر کن", callback_data="adm_clearcoins_yes"),
+            InlineKeyboardButton(text="❌ انصراف", callback_data="adm_coins"),
+        ],
+    ]
+    await call.message.edit_text(
+        "⚠️ <b>هشدار</b>\n\n"
+        "این عمل سکه‌های <b>تمام کاربران</b> را به صفر می‌رساند و قابل بازگشت نیست.\n\n"
+        "آیا مطمئن هستید؟",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data == "adm_clearcoins_yes")
+async def cb_adm_clearcoins_yes(call: CallbackQuery):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "coins"):
+        await call.answer("❌", show_alert=True); return
+    n = db_clear_all_coins()
+    await call.answer(f"✅ سکه {n} کاربر صفر شد", show_alert=True)
+    await call.message.edit_text(
+        f"🧹 سکه‌های همه کاربران پاک شد.\n\n"
+        f"📊 تعداد کاربران متاثر: <b>{fa_digits(n)}</b>",
+        reply_markup=kb_adm_coins(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# --- انتقال سکه بین کاربران (با کسر از مبدا) ---
+@dp.callback_query(F.data == "adm_transcoins")
+async def cb_adm_transcoins(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "coins"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await state.set_state(AdminStates.transfer_coins_from)
+    await call.message.edit_text(
+        "🔁 <b>انتقال سکه</b>\n\n"
+        "🆔 شناسه عددی کاربر <b>مبدا</b> (کسی که از او کسر شود) را ارسال کنید:",
+        reply_markup=kb_back("adm_coins"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.transfer_coins_from)
+async def msg_transfer_from(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        from_uid = int(fa_to_en_digits((message.text or "").strip()))
+    except Exception:
+        await message.answer("❌ شناسه عددی معتبر بفرستید.")
+        return
+    bal = db_get_coins(from_uid)
+    await state.update_data(from_uid=from_uid)
+    await state.set_state(AdminStates.transfer_coins_to)
+    await message.answer(
+        f"✅ مبدا: <code>{from_uid}</code> (موجودی: {fa_digits(bal)} سکه)\n\n"
+        "🆔 حالا شناسه عددی کاربر <b>مقصد</b> را ارسال کنید:",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.transfer_coins_to)
+async def msg_transfer_to(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        to_uid = int(fa_to_en_digits((message.text or "").strip()))
+    except Exception:
+        await message.answer("❌ شناسه عددی معتبر بفرستید.")
+        return
+    await state.update_data(to_uid=to_uid)
+    await state.set_state(AdminStates.transfer_coins_amount)
+    await message.answer(
+        f"✅ مقصد: <code>{to_uid}</code>\n\n"
+        "🪙 تعداد سکه برای انتقال را ارسال کنید:",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.transfer_coins_amount)
+async def msg_transfer_amount(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        amt = int(fa_to_en_digits((message.text or "").strip()))
+        if amt <= 0:
+            raise ValueError()
+    except Exception:
+        await message.answer("❌ عدد معتبر بفرستید.")
+        return
+    data = await state.get_data()
+    from_uid = data.get("from_uid"); to_uid = data.get("to_uid")
+    ok, msg = db_transfer_coins(from_uid, to_uid, amt)
+    await state.clear()
+    if not ok:
+        await message.answer(f"❌ انتقال انجام نشد: {msg}", reply_markup=kb_adm_coins())
+        return
+    new_from = db_get_coins(from_uid)
+    new_to = db_get_coins(to_uid)
+    await message.answer(
+        f"✅ <b>انتقال موفق</b>\n\n"
+        f"🪙 مقدار: <b>{fa_digits(amt)}</b> سکه\n"
+        f"📤 از کاربر <code>{from_uid}</code> ⇐ موجودی جدید: {fa_digits(new_from)}\n"
+        f"📥 به کاربر <code>{to_uid}</code> ⇐ موجودی جدید: {fa_digits(new_to)}",
+        reply_markup=kb_adm_coins(),
+        parse_mode=ParseMode.HTML,
+    )
+    # اطلاع به دو طرف
+    for uid, txt in [
+        (from_uid, f"🪙 مدیر {fa_digits(amt)} سکه از حساب شما کسر و به کاربر دیگری منتقل کرد. (موجودی: {fa_digits(new_from)})"),
+        (to_uid, f"🪙 مدیر {fa_digits(amt)} سکه به حساب شما واریز کرد. (موجودی: {fa_digits(new_to)})"),
+    ]:
+        try:
+            await bot.send_message(uid, txt)
+        except Exception:
+            pass
+
+
+# بازگشت به منوی پنل ادمین
+@dp.callback_query(F.data == "adm_back")
+async def cb_adm_back(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await state.clear()
+    await call.answer()
+    await call.message.edit_text("👑 پنل مدیریت", reply_markup=kb_admin(call.from_user.id))
+
+
+# ==================== ویرایش متن‌ها ====================
+def kb_texts() -> InlineKeyboardMarkup:
+    rows = []
+    for key, label in TEXT_NAMES_FA.items():
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"adm_text_{key}")])
+    rows.append([InlineKeyboardButton(text=BUTTON_LABELS["back"], callback_data="adm_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data == "adm_texts")
+async def cb_adm_texts(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "texts"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await call.message.edit_text(
+        "✏️ یکی از متن‌ها را برای ویرایش انتخاب کنید:",
+        reply_markup=kb_texts(),
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_text_"))
+async def cb_adm_text_edit(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "texts"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    key = call.data[len("adm_text_"):]
+    if key not in DEFAULT_TEXTS:
+        await call.answer("نامعتبر", show_alert=True); return
+    await state.update_data(text_key=key)
+    await state.set_state(AdminStates.edit_text)
+    cur = get_text(key)
+    await call.message.edit_text(
+        f"✏️ ویرایش <b>{TEXT_NAMES_FA.get(key, key)}</b>\n\n"
+        f"<b>متن فعلی:</b>\n<pre>{cur}</pre>\n\n"
+        "متن جدید را ارسال کنید (یا /skip برای انصراف):",
+        reply_markup=kb_back("adm_texts"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.edit_text)
+async def edit_text_handler(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    if (message.text or "").strip() == "/skip":
+        await state.clear()
+        await message.answer("لغو شد.", reply_markup=kb_admin(message.from_user.id))
+        return
+    data = await state.get_data()
+    key = data.get("text_key")
+    new_text = message.text or ""
+    if key:
+        set_text(key, new_text)
+    await state.clear()
+    await message.answer(f"✅ متن «{TEXT_NAMES_FA.get(key, key)}» به‌روزرسانی شد.",
+                         reply_markup=kb_admin(message.from_user.id))
+
+
+# ==================== ویرایش برچسب دکمه‌ها ====================
+BUTTONS_PER_PAGE = 10
+
+
+def kb_buttons_page(page: int) -> InlineKeyboardMarkup:
+    keys = list(BUTTON_NAMES_FA.keys())
+    total = len(keys)
+    offset = page * BUTTONS_PER_PAGE
+    page_keys = keys[offset:offset + BUTTONS_PER_PAGE]
+    rows = []
+    for k in page_keys:
+        cur = get_button_label(k)
+        if len(cur) > 30:
+            cur = cur[:30] + "…"
+        rows.append([InlineKeyboardButton(text=f"{BUTTON_NAMES_FA[k]}: {cur}", callback_data=f"adm_btn_{k}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"adm_buttons_{page-1}"))
+    nav.append(InlineKeyboardButton(text=f"صفحه {page+1}/{max(1,(total+BUTTONS_PER_PAGE-1)//BUTTONS_PER_PAGE)}", callback_data="noop"))
+    if (page + 1) * BUTTONS_PER_PAGE < total:
+        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"adm_buttons_{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=BUTTON_LABELS["back"], callback_data="adm_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data.startswith("adm_buttons_"))
+async def cb_adm_buttons(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "buttons"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    page = int(call.data.split("_")[-1])
+    await call.message.edit_text(
+        "🔘 یکی از دکمه‌ها را برای تغییر برچسب انتخاب کنید:",
+        reply_markup=kb_buttons_page(page),
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_btn_"))
+async def cb_adm_btn_edit(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id) or not has_perm(call.from_user.id, "buttons"):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    key = call.data[len("adm_btn_"):]
+    if key not in DEFAULT_BUTTON_LABELS:
+        await call.answer("نامعتبر", show_alert=True); return
+    await state.update_data(btn_key=key)
+    await state.set_state(AdminStates.edit_button_label)
+    cur = get_button_label(key)
+    await call.message.edit_text(
+        f"🔘 ویرایش برچسب <b>{BUTTON_NAMES_FA.get(key, key)}</b>\n\n"
+        f"<b>برچسب فعلی:</b> {cur}\n\n"
+        "برچسب جدید را ارسال کنید (یا /skip برای انصراف):",
+        reply_markup=kb_back("adm_buttons_0"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.edit_button_label)
+async def edit_btn_handler(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    if (message.text or "").strip() == "/skip":
+        await state.clear()
+        await message.answer("لغو شد.", reply_markup=kb_admin(message.from_user.id))
+        return
+    data = await state.get_data()
+    key = data.get("btn_key")
+    new_label = (message.text or "").strip()
+    if not new_label:
+        await message.answer("❌ برچسب نمی‌تواند خالی باشد.")
+        return
+    if key:
+        set_button_label(key, new_label)
+    await state.clear()
+    await message.answer(f"✅ برچسب «{BUTTON_NAMES_FA.get(key, key)}» به‌روزرسانی شد.",
+                         reply_markup=kb_admin(message.from_user.id))
+
+
+# ==================== مدیریت ادمین‌های جانبی (فقط سوپر ادمین) ====================
+def kb_subadmins() -> InlineKeyboardMarkup:
+    rows = []
+    for sa in get_sub_admins():
+        rows.append([InlineKeyboardButton(text=f"👤 {sa.get('name') or sa.get('user_id')}", callback_data=f"adm_subadm_{sa['user_id']}")])
+    rows.append([InlineKeyboardButton(text="➕ افزودن ادمین", callback_data="adm_addsubadm")])
+    rows.append([InlineKeyboardButton(text=BUTTON_LABELS["back"], callback_data="adm_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_subadmin_detail(uid: int) -> InlineKeyboardMarkup:
+    sa = find_sub_admin(uid)
+    perms = (sa or {}).get("perms", [])
+    rows = []
+    for p in ALL_PERMS:
+        on = p in perms
+        flag = "✅" if on else "⛔️"
+        rows.append([InlineKeyboardButton(text=f"{flag} {PERM_NAMES_FA.get(p, p)}", callback_data=f"adm_tgperm_{uid}_{p}")])
+    rows.append([InlineKeyboardButton(text="🗑 حذف ادمین", callback_data=f"adm_delsubadm_{uid}")])
+    rows.append([InlineKeyboardButton(text=BUTTON_LABELS["back"], callback_data="adm_subadmins")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data == "adm_subadmins")
+async def cb_adm_subadmins(call: CallbackQuery, state: FSMContext):
+    if not is_super_admin(call.from_user.id):
+        await call.answer("❌ فقط مدیر اصلی.", show_alert=True); return
+    await call.answer()
+    sub_list = get_sub_admins()
+    txt = "👤 <b>مدیریت ادمین‌های جانبی</b>\n\n"
+    if not sub_list:
+        txt += "هیچ ادمین جانبی ثبت نشده."
+    else:
+        txt += f"تعداد: {len(sub_list)}\nروی هر ادمین برای تنظیم دسترسی‌ها بزنید:"
+    await call.message.edit_text(txt, reply_markup=kb_subadmins(), parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(F.data == "adm_addsubadm")
+async def cb_adm_addsubadm(call: CallbackQuery, state: FSMContext):
+    if not is_super_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    await state.set_state(AdminStates.add_sub_admin)
+    await call.message.edit_text(
+        "🆔 شناسه عددی ادمین جدید را ارسال کنید:\n\n"
+        "می‌توانید نام را هم با کاما بعد از شناسه بفرستید، مثلاً:\n"
+        "<code>123456789, علی</code>",
+        reply_markup=kb_back("adm_subadmins"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.message(AdminStates.add_sub_admin)
+async def add_subadm_handler(message: Message, state: FSMContext):
+    if not is_super_admin(message.from_user.id):
+        return
+    raw = (message.text or "").strip()
+    name = ""
+    if "," in raw:
+        a, b = raw.split(",", 1)
+        raw = a.strip(); name = b.strip()
+    try:
+        uid = int(raw)
+    except Exception:
+        await message.answer("❌ شناسه عددی معتبر بفرستید.")
+        return
+    if uid in SUPER_ADMIN_IDS:
+        await message.answer("⚠️ این شخص خودش مدیر اصلی است.")
+        await state.clear()
+        return
+    add_sub_admin(uid, name=name, perms=list(ALL_PERMS))
+    await state.clear()
+    await message.answer(
+        f"✅ ادمین <code>{uid}</code> با تمام دسترسی‌ها افزوده شد.",
+        reply_markup=kb_admin(message.from_user.id),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_subadm_"))
+async def cb_adm_subadm_detail(call: CallbackQuery, state: FSMContext):
+    if not is_super_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    await call.answer()
+    uid = int(call.data.split("_")[-1])
+    sa = find_sub_admin(uid)
+    if not sa:
+        await call.message.edit_text("❌ پیدا نشد.", reply_markup=kb_back("adm_subadmins"))
+        return
+    txt = (
+        f"👤 <b>ادمین جانبی</b>\n\n"
+        f"🆔 شناسه: <code>{uid}</code>\n"
+        f"📛 نام: {sa.get('name') or '—'}\n\n"
+        f"دسترسی‌ها (✅ فعال / ⛔️ غیرفعال):"
+    )
+    await call.message.edit_text(txt, reply_markup=kb_subadmin_detail(uid), parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(F.data.startswith("adm_tgperm_"))
+async def cb_adm_tgperm(call: CallbackQuery, state: FSMContext):
+    if not is_super_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    parts = call.data.split("_")
+    # adm_tgperm_<uid>_<perm>
+    uid = int(parts[2])
+    perm = "_".join(parts[3:])
+    if perm not in ALL_PERMS:
+        await call.answer("نامعتبر", show_alert=True); return
+    on = toggle_sub_admin_perm(uid, perm)
+    await call.answer("✅ فعال شد" if on else "⛔️ غیرفعال شد")
+    sa = find_sub_admin(uid)
+    if not sa:
+        return
+    txt = (
+        f"👤 <b>ادمین جانبی</b>\n\n"
+        f"🆔 شناسه: <code>{uid}</code>\n"
+        f"📛 نام: {sa.get('name') or '—'}\n\n"
+        f"دسترسی‌ها (✅ فعال / ⛔️ غیرفعال):"
+    )
+    try:
+        await call.message.edit_text(txt, reply_markup=kb_subadmin_detail(uid), parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data.startswith("adm_delsubadm_"))
+async def cb_adm_delsubadm(call: CallbackQuery, state: FSMContext):
+    if not is_super_admin(call.from_user.id):
+        await call.answer("❌", show_alert=True); return
+    uid = int(call.data.split("_")[-1])
+    remove_sub_admin(uid)
+    await call.answer("✅ حذف شد")
+    sub_list = get_sub_admins()
+    txt = "👤 <b>مدیریت ادمین‌های جانبی</b>\n\n"
+    if not sub_list:
+        txt += "هیچ ادمین جانبی ثبت نشده."
+    else:
+        txt += f"تعداد: {len(sub_list)}\nروی هر ادمین برای تنظیم دسترسی‌ها بزنید:"
+    await call.message.edit_text(txt, reply_markup=kb_subadmins(), parse_mode=ParseMode.HTML)
 
 
 # ==================== Main ====================
