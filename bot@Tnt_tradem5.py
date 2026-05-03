@@ -72,7 +72,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== تنظیمات ثابت ====================
-BOT_TOKEN = "8637717796:AAG7iatMs1oB7Jc5ZFJPIhdsu4k0gdMqov0"
+BOT_TOKEN = "8637717796:AAEV9uNmwIZKBGhOGa3JyGhM5L9wOzSfXKI"
 SUPER_ADMIN_IDS = [8478999016,6668456049,8541787263]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
